@@ -556,7 +556,6 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
-    // FIXED EXPLICIT CONFIGURATION DECODER (Handles JSON, Manifests, Text files flawlessly)
     else {
         try {
             let processedTextString = "";
@@ -564,7 +563,6 @@ async function selectFile(item, element) {
                 const parts = liveSourceData.split(',');
                 processedTextString = atob(parts[1]);
             } else {
-                // Perfected text fetch sequence with rigorous HTML intercept filters
                 const rawTextResponse = await fetch(liveSourceData);
                 if (!rawTextResponse.ok) throw new Error("Network stream failure");
                 
@@ -584,7 +582,6 @@ async function selectFile(item, element) {
                     </div>
                 </div>`;
         } catch (e) {
-            // Secure functional blueprint display fallback if the manifest format uses deep binary headers
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh text-zinc-500 font-mono text-[10px] p-4 text-center flex flex-col justify-center items-center gap-2 bg-[#020204]">
