@@ -181,11 +181,12 @@ def process_file_logic():
 
     try:
         response = requests.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+        
+        # Verify the raw network status code to prevent bypassing on strict key lookups
+        if not response.ok:
+            return jsonify(response.json()), response.status_code
+
         extractor_data = response.json()
-
-        if not response.ok or not extractor_data.get("success"):
-            return jsonify(extractor_data), response.status_code
-
         assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
 
         # Process each extracted component to build safe base64-encoded stream routes
