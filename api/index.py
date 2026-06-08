@@ -51,7 +51,7 @@ def get_latest_calculated_version():
             return jsonify({"success": True, "target_version": calculated_target})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
-    return jsonify({"success": False, "message": "Invalid configuration dataset response."}), 500
+    return jsonify({"success": False, "message": "Failed response lookup."}), 500
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
@@ -66,21 +66,19 @@ def check_update():
         version = input_val
 
     if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Illegal version format entered"}), 400
+        return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
 
     new_text, active_version = get_file_info_data(version)
 
-    # Automatically drop back an index step if targeted version hasn't generated on servers yet
     if not new_text:
         fallback_ver = get_previous_version(version)
         new_text, active_version = get_file_info_data(fallback_ver)
         if not new_text:
-            return jsonify({"success": False, "message": "Target version logs missing from cloud storage servers"}), 404
+            return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
 
     prev_version = get_previous_version(active_version)
     old_text, _ = get_file_info_data(prev_version)
 
-    # Build map layout profile mapping of previous sizes to compare file modifications accurately
     old_files_map = {}
     if old_text:
         for line in old_text.splitlines():
@@ -111,14 +109,13 @@ def check_update():
         except: 
             size = 0
 
-        # Perfect Modification/New Identifier Logic Rule
         if file_id in old_files_map:
             if old_files_map[file_id] != size:
-                status = "Modified" # Same name, different payload layout sizing
+                status = "Modified"
             else:
-                continue # Completely untouched identical file, bypass it
+                continue
         else:
-            status = "New" # Brand new file signature deployment found
+            status = "New"
 
         encoded = encode_suffix(suffix)
         download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
