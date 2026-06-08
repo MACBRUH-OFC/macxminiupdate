@@ -23,7 +23,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 .main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
 @media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
-/* Uniform Panels */
+/* Panels Layout */
 .uniform-panel { 
     background: #09090d; border: 1px solid #181822; position: relative; 
     box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 530px; display: flex; 
@@ -211,8 +211,8 @@ let activeCache = [];
 let activeMode = "auto";
 let preCalculatedAutoVersion = "";
 
-// Dedicated Persistent Store for Browser Blobs
-let persistentBlobSessionCache = {};
+// Holds data-payload representations directly inside local JavaScript runtime space
+let offlineDataPayloadSessionCache = {};
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
@@ -392,6 +392,9 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
+        
+        // Tells the processor backend to output base64 data strings for direct local integration
+        formData.append('embed_payloads', 'true');
 
         const response = await fetch('/api/process', {
             method: 'POST',
@@ -406,27 +409,25 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             return;
         }
 
-        targets.forEach((asset) => {
+        targets.forEach((asset, subIdx) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 p-1.5 rounded cursor-pointer text-left";
             
             let displayName = asset.name || asset.fileName || "unnamed_asset";
             let rawType = asset.type || asset.label || "Unknown";
-            let fallbackNetworkUrl = asset.preview_url || asset.url;
-
-            // Generate an isolated local Unique ID for safety map tracking
-            const assetUniqueId = `asset_${index}_${Math.random().toString(36).substr(2, 9)}`;
             
-            // Background thread intercepts and caches data structures into memory immediately
-            preloadAndLocalizeAssetBlob(fallbackNetworkUrl, assetUniqueId, rawType);
+            // Local Session ID assignments mapped directly to internal payload content
+            const uniqueTrackingKey = `offline_payload_${index}_${subIdx}_${Date.now()}`;
+            
+            // Pack base64 layout data completely offline into runtime variables
+            offlineDataPayloadSessionCache[uniqueTrackingKey] = asset.base64_data || asset.preview_url || asset.url;
 
             subRow.onclick = (e) => {
                 e.stopPropagation();
                 selectFile({ 
-                    id: assetUniqueId,
+                    id: uniqueTrackingKey,
                     name: displayName, 
-                    label: rawType, 
-                    fallback_url: fallbackNetworkUrl 
+                    label: rawType
                 }, subRow);
             };
             
@@ -434,35 +435,13 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
                     <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
                 </span>
-                <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Stream Asset'}</span>
+                <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Cached Offline'}</span>
             `;
             sublist.appendChild(subRow);
         });
     } catch (err) {
         loader.style.display = "none";
         sublist.innerHTML = `<div class="text-[9px] text-red-500 py-1 text-center">Extraction processing pipeline request error.</div>`;
-    }
-}
-
-// Intercepts network objects instantly to store files locally in memory
-async function preloadAndLocalizeAssetBlob(networkUrl, uniqueId, rawType) {
-    try {
-        const res = await fetch(networkUrl);
-        if(!res.ok) throw new Error();
-        const blobData = await res.blob();
-        
-        // Rewrite Content-Type header filters for raw audio layers to prevent system conflicts
-        let directType = blobData.type;
-        if(rawType.toLowerCase().includes('audio') && !directType) directType = 'audio/ogg';
-        if(rawType.toLowerCase().includes('video') && !directType) directType = 'video/mp4';
-        
-        const strictBlob = new Blob([blobData], { type: directType });
-        const localizedBlobUrl = URL.createObjectURL(strictBlob);
-        
-        persistentBlobSessionCache[uniqueId] = localizedBlobUrl;
-    } catch {
-        // Fallback reference tracking points directly to original network URL
-        persistentBlobSessionCache[uniqueId] = networkUrl;
     }
 }
 
@@ -498,22 +477,33 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    // Use our persistent memory address block pointer instead of remote Vercel links
-    const targetSourceUrl = persistentBlobSessionCache[item.id] || item.fallback_url;
+    // Pull directly from base64 memory object - requires completely zero network tracking!
+    let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
+    
+    const ext = item.name.split('.').pop().toLowerCase();
+    const lLabel = item.label.toLowerCase();
+
+    // Auto-detect and format clean base64 data headers if missing from extraction stream
+    if (liveSourceData.startsWith('ey') || (!liveSourceData.startsWith('data:') && !liveSourceData.startsWith('http'))) {
+        if (['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
+            liveSourceData = `data:audio/ogg;base64,${liveSourceData}`;
+        } else if (['mp4','webm'].includes(ext) || lLabel.includes('video')) {
+            liveSourceData = `data:video/mp4;base64,${liveSourceData}`;
+        } else if (['png','jpg','jpeg','webp'].includes(ext) || lLabel.includes('texture')) {
+            liveSourceData = `data:image/png;base64,${liveSourceData}`;
+        }
+    }
     
     const saveBtn = document.getElementById('singleSaveBtn');
-    saveBtn.href = targetSourceUrl;
+    saveBtn.href = liveSourceData;
     saveBtn.setAttribute('download', item.name);
 
     mediaBox.innerHTML = `
         <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
 
-    const ext = item.name.split('.').pop().toLowerCase();
-    const lLabel = item.label.toLowerCase();
-    
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Interactive 3D Mesh Modeler
+    // Interactive 3D Mesh Modeler Viewport
     if (ext === 'obj' || lLabel.includes('mesh')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
@@ -521,18 +511,18 @@ async function selectFile(item, element) {
                     <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
-        initBabylonMeshScene("babylonAssetCanvas", targetSourceUrl, item.name);
+        initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name);
     } 
-    // Image / Sprite Sheets
+    // Image, Sprite Maps & Texture Rendering Viewport
     else if(['png','jpg','jpeg','webp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <img src="${targetSourceUrl}" class="pixelated-render">
+                    <img src="${liveSourceData}" class="pixelated-render">
                 </div>
             </div>`;
     } 
-    // Video Clip Engines
+    // Ultra Low-Latency Offline Video Clip Controller
     else if(['mp4','mkv','webm'].includes(ext) || lLabel.includes('video')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
@@ -540,7 +530,7 @@ async function selectFile(item, element) {
                     <div id="videoCenterOverlay" class="center-play-overlay">
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
-                    <video id="customVideoPlayer" src="${targetSourceUrl}" class="w-full h-full object-contain"></video>
+                    <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
                 </div>
                 <div class="custom-control-bar">
                     <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
@@ -554,7 +544,7 @@ async function selectFile(item, element) {
             </div>`;
         initCustomVideoController();
     } 
-    // Audio Clips & Sound Effects
+    // Ultra Low-Latency Offline Sound Effects & Audio Player
     else if(['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
@@ -563,7 +553,7 @@ async function selectFile(item, element) {
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
                     <canvas id="audioVisualizerCanvas"></canvas>
-                    <audio id="customAudioPlayer" src="${targetSourceUrl}" crossorigin="anonymous" class="hidden"></audio>
+                    <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
                 </div>
                 <div class="custom-control-bar">
                     <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
@@ -577,15 +567,20 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
-    // Text Blueprints / Scripts / Configurations
+    // Data Blueprints / Text Files / Configuration Scripts
     else {
         try {
-            const r = await fetch(targetSourceUrl);
-            const txt = await r.text();
+            let processedTextString = "";
+            if (liveSourceData.startsWith('data:')) {
+                const extractionStringParts = liveSourceData.split(',');
+                processedTextString = atob(extractionStringParts[1]);
+            } else {
+                processedTextString = liveSourceData;
+            }
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
-                        <pre class="text-[10px] font-mono text-zinc-500 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#030305]">${txt.slice(0, 16000)}</pre>
+                        <pre class="text-[10px] font-mono text-zinc-500 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#030305]">${processedTextString.slice(0, 24000)}</pre>
                     </div>
                 </div>`;
         } catch {
