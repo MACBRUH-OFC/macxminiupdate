@@ -186,12 +186,9 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
     <div id="listWindowPanel" class="uniform-panel panel-2">
         <div class="panel-body">
             <div class="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3 flex-shrink-0 min-w-0">
-                <div class="min-w-0 text-left mr-2 flex-1">
-                    <div class="flex gap-4">
-                        <button id="tabChangedPackages" class="text-xs font-black uppercase tracking-wider text-yellow-500 border-b-2 border-yellow-500 pb-1 outline-none">Packages</button>
-                        <button id="tabAddedItems" class="text-xs font-black uppercase tracking-wider text-zinc-500 pb-1 hover:text-white transition-colors outline-none">Added Items (<span id="addedItemsCountLabel">0</span>)</button>
-                    </div>
-                    <p id="cacheCounterText" class="text-[10px] text-zinc-500 truncate mt-1">0 files found</p>
+                <div class="min-w-0 text-left mr-2">
+                    <h2 class="text-xs font-black text-white uppercase tracking-wider">Discovered Packages</h2>
+                    <p id="cacheCounterText" class="text-[10px] text-zinc-500 truncate">0 files found</p>
                 </div>
                 <div class="flex items-center gap-2 hidden" id="listActions">
                     <button onclick="downloadMasterBulkZip()" title="Download All Files as a ZIP" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-yellow-500 hover:text-white hover:bg-yellow-500 hover:border-yellow-500 transition-all shadow-md flex-shrink-0">
@@ -210,7 +207,6 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                     <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Analyzing update patch packages...</span>
                 </div>
                 <div id="fileList" class="hidden flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-w-0"></div>
-                <div id="addedItemsList" class="hidden flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar min-w-0"></div>
             </div>
         </div>
     </div>
@@ -282,7 +278,6 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 
 <script>
 let activeCache = [];
-let activeAddedItems = [];
 let activeMode = "auto";
 let preCalculatedAutoVersion = "";
 let activeBuildIsNewPatch = false;
@@ -303,28 +298,7 @@ const extractBtn = document.getElementById("extractBtn");
 const btnIcon = document.getElementById("btnIcon");
 const btnText = document.getElementById("btnText");
 const fileList = document.getElementById("fileList");
-const addedItemsList = document.getElementById("addedItemsList");
 const listWindowPanel = document.getElementById("listWindowPanel");
-
-const tabChangedPackages = document.getElementById("tabChangedPackages");
-const tabAddedItems = document.getElementById("tabAddedItems");
-
-tabChangedPackages.addEventListener("click", () => {
-    tabChangedPackages.className = "text-xs font-black uppercase tracking-wider text-yellow-500 border-b-2 border-yellow-500 pb-1 outline-none";
-    tabAddedItems.className = "text-xs font-black uppercase tracking-wider text-zinc-500 pb-1 hover:text-white transition-colors outline-none";
-    if (activeCache.length > 0) {
-        fileList.classList.remove("hidden");
-    }
-    addedItemsList.classList.add("hidden");
-});
-
-tabAddedItems.addEventListener("click", () => {
-    tabAddedItems.className = "text-xs font-black uppercase tracking-wider text-yellow-500 border-b-2 border-yellow-500 pb-1 outline-none";
-    tabChangedPackages.className = "text-xs font-black uppercase tracking-wider text-zinc-500 pb-1 hover:text-white transition-colors outline-none";
-    fileList.classList.add("hidden");
-    addedItemsList.classList.remove("hidden");
-    renderAddedItems();
-});
 
 pipelineTabs.addEventListener("click", (e) => {
     const target = e.target.closest(".tab-btn");
@@ -376,6 +350,13 @@ function computeByteScale(bytes) {
     return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + ['Bytes', 'KB', 'MB', 'GB'][i];
 }
 
+function encodeBase64Url(str) {
+    return btoa(unescape(encodeURIComponent(str)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
 extractBtn.onclick = async () => {
     let targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
     if(!targetVersion || targetVersion === "Offline" || targetVersion === "Error") {
@@ -395,7 +376,6 @@ extractBtn.onclick = async () => {
     document.getElementById('listEmptyState').classList.add('hidden');
     document.getElementById('listLoadingState').classList.remove('hidden');
     fileList.classList.add('hidden');
-    addedItemsList.classList.add('hidden');
     document.getElementById('listActions').classList.add('hidden');
 
     // Hide items section while loading
@@ -407,16 +387,9 @@ extractBtn.onclick = async () => {
         if(!data.success) throw new Error(data.message || "Failed parsing target channels.");
 
         activeCache = data.files || [];
-        activeAddedItems = data.added_items || [];
 
         document.getElementById('listLoadingState').classList.add('hidden');
-<<<<<<< HEAD
         renderList();
-=======
-        
-        tabChangedPackages.click(); // Default to packages view
-        renderList(data.totalSize); 
->>>>>>> 1d9ed28cebb37d37326dbba9e501e1264f5694ac
 
         document.getElementById('listActions').classList.remove('hidden');
         fileList.classList.remove('hidden');
@@ -444,12 +417,9 @@ extractBtn.onclick = async () => {
     }
 };
 
-function renderList(totalSize) {
+function renderList() {
     fileList.innerHTML = "";
-    
-    const sizeStr = computeByteScale(totalSize || 0);
-    document.getElementById('cacheCounterText').innerText = `${activeCache.length} packages found (${sizeStr})`;
-    document.getElementById('addedItemsCountLabel').innerText = activeAddedItems.length;
+    document.getElementById('cacheCounterText').innerText = `${activeCache.length} patch elements identified`;
 
     if(activeCache.length === 0) {
         document.getElementById('listEmptyState').classList.remove('hidden');
@@ -481,7 +451,7 @@ function renderList(totalSize) {
                     </div>
                 </div>
                 <div class="flex items-center gap-2 flex-shrink-0 ml-2">
-                    <button class="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-yellow-500" title="Extract and download Zip package bundle" onclick="interceptDownloadZip(event, '${item.token}')">
+                    <button class="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-yellow-500" title="Extract and download Zip package bundle" onclick="interceptDownloadZip(event, '${encodeURIComponent(item.url)}')">
                         <i class="fa-solid fa-file-zipper text-[10px]"></i>
                     </button>
                     <i id="arrow-${index}" class="fa-solid fa-chevron-down text-[9px] text-zinc-600 transition-transform"></i>
@@ -493,70 +463,6 @@ function renderList(totalSize) {
             </div>
         `;
         fileList.appendChild(row);
-    });
-}
-
-function renderAddedItems() {
-    addedItemsList.innerHTML = "";
-    
-    if (activeAddedItems.length === 0) {
-        addedItemsList.innerHTML = `
-            <div class="flex-1 flex flex-col items-center justify-center text-zinc-700 p-8 text-center h-full">
-                <i class="fa-solid fa-wand-magic-sparkles text-2xl mb-3 text-zinc-800"></i>
-                <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600 block">No Items Extracted</span>
-                <p class="text-[10px] text-zinc-500 max-w-[180px] mt-1 leading-normal">No newly added bundles or weapon item hotfixes detected in this version build.</p>
-            </div>
-        `;
-        return;
-    }
-
-    activeAddedItems.forEach(item => {
-        const row = document.createElement('div');
-        row.className = "bg-[#0b0b0f] border border-zinc-900 rounded-xl p-3 flex flex-col gap-2 relative min-w-0";
-        
-        let partsHtml = "";
-        if (item.parts && item.parts.length > 0) {
-            partsHtml = `
-            <div class="border-t border-zinc-900/60 pt-2 mt-1">
-                <span class="text-[8px] font-black text-zinc-500 tracking-wider block mb-1">CONSTITUENT PARTS:</span>
-                <div class="grid grid-cols-1 gap-1 pl-2">
-                    ${item.parts.map(part => `
-                        <div class="flex items-center gap-2 py-1 border-b border-zinc-900/40 last:border-0">
-                            <img src="/api?action=proxy-icon&id=${part.id}" onerror="this.style.display='none'" class="w-6 h-6 rounded bg-black border border-zinc-800 object-cover">
-                            <div class="flex-1 min-w-0 text-left">
-                                <span class="text-[10px] font-bold text-zinc-400 block truncate">${part.name}</span>
-                                <span class="text-[8px] font-mono text-zinc-600">ID: ${part.id}</span>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>`;
-        }
-        
-        row.innerHTML = `
-            <div class="flex items-center gap-3">
-                <div class="w-12 h-12 rounded-lg bg-black border border-zinc-850 flex items-center justify-center overflow-hidden flex-shrink-0">
-                    <img src="/api?action=proxy-icon&id=${item.id}" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'; this.className='opacity-10 h-6 object-contain';" class="w-full h-full object-cover">
-                </div>
-                <div class="flex-1 min-w-0 text-left">
-                    <span class="text-[11px] font-black text-white block leading-tight break-words">${item.name}</span>
-                    <span class="text-[9px] font-mono text-zinc-500 block mt-1">ID: ${item.id}</span>
-                </div>
-                <div class="flex flex-col gap-1 items-end flex-shrink-0">
-                    ${item.is_bundle ? '<span class="text-[8px] bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 font-black px-1.5 py-0.5 rounded tracking-wider">BUNDLE</span>' : ''}
-                    <div class="flex gap-1 mt-1">
-                        <button onclick="navigator.clipboard.writeText('${item.id}'); alert('Copied ID: ${item.id}');" class="w-6 h-6 rounded bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white" title="Copy Item ID">
-                            <i class="fa-solid fa-copy text-[9px]"></i>
-                        </button>
-                        <a href="/api?action=proxy-icon&id=${item.id}" download="${item.name}.png" class="w-6 h-6 rounded bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white" title="Download Icon" target="_blank">
-                            <i class="fa-solid fa-download text-[9px]"></i>
-                        </a>
-                    </div>
-                </div>
-            </div>
-            ${partsHtml}
-        `;
-        addedItemsList.appendChild(row);
     });
 }
 
@@ -595,11 +501,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
-<<<<<<< HEAD
         formData.append('bundle_url', url);
-=======
-        formData.append('bundle_url', url); 
->>>>>>> 1d9ed28cebb37d37326dbba9e501e1264f5694ac
 
         const response = await fetch('/api?action=process', {
             method: 'POST',
@@ -841,9 +743,11 @@ async function selectFile(item, element) {
     }
 }
 
-function interceptDownloadZip(e, token) {
+function interceptDownloadZip(e, encodedUrl) {
     e.stopPropagation();
-    window.open(`/api?action=extract-zip&token=${token}`, '_blank');
+    const url = decodeURIComponent(encodedUrl);
+    const encodedBundleUrl = encodeBase64Url(url);
+    window.open(`https://ff-asset-extractor.vercel.app/api/extract?bundle_url=${encodedBundleUrl}&download_type=zip`, '_blank');
 }
 
 function downloadMasterBulkZip() {
