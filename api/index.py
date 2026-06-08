@@ -8,6 +8,7 @@ CORS(app)
 
 BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 VERSION_API = 'https://ff-version.vercel.app/update'
+EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract/bundle"
 
 def get_previous_version(version_str):
     try:
@@ -37,6 +38,14 @@ def get_file_info_data(version):
     except:
         pass
     return None, None
+
+@app.route('/')
+def home():
+    try:
+        with open('index.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return jsonify({"success": False, "message": "index.html template missing"}), 404
 
 @app.route('/api/latest-version', methods=['GET'])
 def get_latest_calculated_version():
@@ -135,3 +144,26 @@ def check_update():
         "totalSize": total_size,
         "files": file_infos
     })
+
+@app.route('/api/process', methods=['POST'])
+def process_file():
+    if 'file' not in request.files:
+        return jsonify({"success": False, "message": "No file uploaded"}), 400
+        
+    uploaded_file = request.files['file']
+    if uploaded_file.filename == '':
+        return jsonify({"success": False, "message": "Empty filename header sent"}), 400
+    
+    # Pack parameters explicitly to match the external 'asset_bundle' configuration requirement
+    files = {
+        'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
+    }
+    
+    try:
+        response = requests.post(EXTRACTOR_API_URL, files=files, timeout=30)
+        return jsonify(response.json()), response.status_code
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
+
+if __name__ == '__main__':
+    app.run(port=5000, debug=True)
