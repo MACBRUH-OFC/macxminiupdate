@@ -247,10 +247,10 @@ async function initSystemMatrix() {
     try {
         txtAutoLabel.textContent = "Checking live channels...";
         radarIndicatorDot.className = "indicator-dot neutral";
-        
+
         const response = await fetch('/api/latest-version');
         const data = await response.json();
-        
+
         if (data.success && data.target_version) {
             preCalculatedAutoVersion = data.target_version;
             txtAutoTarget.textContent = preCalculatedAutoVersion;
@@ -421,10 +421,10 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         targets.forEach((asset, subIdx) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 rounded cursor-pointer text-left";
-            
+
             let displayName = asset.name || asset.fileName || "unnamed_asset";
             let rawType = asset.type || asset.label || "Unknown";
-            
+
             const uniqueTrackingKey = asset.preview_url || asset.url || "";
             offlineDataPayloadSessionCache[uniqueTrackingKey] = uniqueTrackingKey;
 
@@ -436,7 +436,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                     label: rawType
                 }, subRow);
             };
-            
+
             subRow.innerHTML = `
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
                     <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
@@ -454,7 +454,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 function getIcon(label, filename = "") {
     const l = label.toLowerCase();
     const ext = filename.split('.').pop().toLowerCase();
-    
+
     if(l.includes('texture') || ext === 'png' && !l.includes('sprite')) return 'fa-image text-yellow-500';
     if(l.includes('spriteatlas') || ext === 'atlas' || filename.includes('.atlas.txt')) return 'fa-boxes-stacked text-amber-400';
     if(l.includes('sprite') || ext === 'png') return 'fa-file-image text-orange-400';
@@ -468,6 +468,45 @@ function getIcon(label, filename = "") {
     if(l.includes('font') || ['ttf','otf'].includes(ext)) return 'fa-font text-teal-400';
     if(l.includes('text') || ['txt','json','xml','manifest'].includes(ext)) return 'fa-file-lines text-zinc-400';
     return 'fa-file-code text-zinc-500';
+}
+
+function getHexDump(arrayBuffer) {
+    const view = new DataView(arrayBuffer);
+    let hexLines = [];
+    const bytesPerLine = 16;
+    for (let i = 0; i < Math.min(view.byteLength, 4096); i += bytesPerLine) {
+        let hexParts = [];
+        let asciiParts = [];
+        for (let j = 0; j < bytesPerLine; j++) {
+            if (i + j < view.byteLength) {
+                const byte = view.getUint8(i + j);
+                hexParts.push(byte.toString(16).padStart(2, '0').toUpperCase());
+                asciiParts.push((byte >= 32 && byte <= 126) ? String.fromCharCode(byte) : '.');
+            } else {
+                hexParts.push('  ');
+                asciiParts.push(' ');
+            }
+        }
+        const offset = i.toString(16).padStart(8, '0').toUpperCase();
+        hexLines.push(`${offset}  ${hexParts.slice(0, 8).join(' ')}  ${hexParts.slice(8).join(' ')}  |${asciiParts.join('')}|`);
+    }
+    if (view.byteLength > 4096) {
+        hexLines.push(`... [Showing first 4KB of ${view.byteLength} bytes] ...`);
+    }
+    return hexLines.join('\n');
+}
+
+function showFallbackError(errorMessage) {
+    const mediaBox = document.getElementById('mediaBox');
+    mediaBox.innerHTML = `
+        <div class="custom-player-wrapper h-full">
+            <div class="aspect-16-9-viewport full-viewport-mesh text-zinc-500 font-mono text-[10px] p-4 text-center flex flex-col justify-center items-center gap-2 bg-[#020204]">
+                <i class="fa-solid fa-triangle-exclamation text-xl text-red-500 animate-pulse"></i>
+                <span class="text-zinc-300 font-bold">Failed to load preview</span>
+                <span class="text-[9px] text-zinc-500 max-w-[240px]">${errorMessage}</span>
+                <span class="text-[9px] text-zinc-600 mt-2">You can still download the asset directly using the button below.</span>
+            </div>
+        </div>`;
 }
 
 async function selectFile(item, element) {
@@ -486,7 +525,7 @@ async function selectFile(item, element) {
     let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
     const ext = item.name.split('.').pop().toLowerCase();
     const lLabel = item.label.toLowerCase();
-    
+
     const saveBtn = document.getElementById('singleSaveBtn');
     saveBtn.href = liveSourceData;
     saveBtn.setAttribute('download', item.name);
@@ -495,6 +534,12 @@ async function selectFile(item, element) {
         <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
 
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Category Identification Flags
+    const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite');
+    const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video');
+    const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio');
+    const isBinary = ['bin','bytes','dat','bundle','so','dll','apk','assets','db'].includes(ext) || lLabel.includes('binary') || lLabel.includes('bytes');
 
     if (ext === 'obj' || lLabel.includes('mesh')) {
         mediaBox.innerHTML = `
@@ -505,7 +550,7 @@ async function selectFile(item, element) {
             </div>`;
         initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name);
     } 
-    else if(['png','jpg','jpeg','webp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite')) {
+    else if(isImage) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -513,7 +558,7 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
     } 
-    else if(['mp4','mkv','webm'].includes(ext) || lLabel.includes('video')) {
+    else if(isVideo) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -534,7 +579,7 @@ async function selectFile(item, element) {
             </div>`;
         initCustomVideoController();
     } 
-    else if(['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
+    else if(isAudio) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -556,7 +601,33 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
+    else if(isBinary) {
+        // Hexadecimal reader view for raw files like .bin, .bytes, .dat structures
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
+                    <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
+                        <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase gff border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
+                            <span>Hexadecimal representation (First 4KB)</span>
+                            <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
+                        </div>
+                        <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-400/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
+                    </div>
+                </div>
+            </div>`;
+        try {
+            const rawResponse = await fetch(liveSourceData);
+            if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
+            const arrayBuffer = await rawResponse.arrayBuffer();
+            document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
+            const hexDump = getHexDump(arrayBuffer);
+            document.getElementById('hexDumpContainer').textContent = hexDump;
+        } catch (e) {
+            showFallbackError(e.message);
+        }
+    }
     else {
+        // Standard text, configs, JSON, XML markup viewers
         try {
             let processedTextString = "";
             if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
@@ -564,17 +635,17 @@ async function selectFile(item, element) {
                 processedTextString = atob(parts[1]);
             } else {
                 const rawTextResponse = await fetch(liveSourceData);
-                if (!rawTextResponse.ok) throw new Error("Network stream failure");
-                
+                if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
+
                 const contentText = await rawTextResponse.text();
                 const sanitizedCheck = contentText.trim().toLowerCase();
-                
+
                 if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head')) {
-                    throw new Error("Loop detection filter active");
+                    throw new Error("Loop detection active: Server returned local HTML routing document instead of asset file raw bytes.");
                 }
                 processedTextString = contentText;
             }
-            
+
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -582,14 +653,7 @@ async function selectFile(item, element) {
                     </div>
                 </div>`;
         } catch (e) {
-            mediaBox.innerHTML = `
-                <div class="custom-player-wrapper h-full">
-                    <div class="aspect-16-9-viewport full-viewport-mesh text-zinc-500 font-mono text-[10px] p-4 text-center flex flex-col justify-center items-center gap-2 bg-[#020204]">
-                        <i class="fa-solid fa-file-invoice text-xl text-zinc-700 animate-pulse"></i>
-                        <span class="text-zinc-300 font-bold">Structural Configuration Blueprint Parsed</span>
-                        <span class="text-[9px] text-zinc-600 max-w-[240px]">Manifest dataset stream registered safely inside runtime memory.</span>
-                    </div>
-                </div>`;
+            showFallbackError(e.message);
         }
     }
 }
