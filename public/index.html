@@ -190,7 +190,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
             </div>
 
-            <div class="tab-row mb-3" id="packageTabs">
+            <div class="tab-row mb-3 hidden" id="packageTabs">
                 <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)</div>
                 <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)</div>
             </div>
@@ -391,10 +391,23 @@ extractBtn.onclick = async () => {
 
         document.getElementById('listActions').classList.remove('hidden');
         
-        if (activePackageTab === "files") {
+        // Dynamically toggle the display of New Items tab based on structural availability
+        if (activeNewItems.length === 0) {
+            document.getElementById("packageTabs").classList.add("hidden");
+            document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => {
+                if (btn.dataset.tab === "files") btn.classList.add("active");
+                else btn.classList.remove("active");
+            });
+            activePackageTab = "files";
             fileList.classList.remove('hidden');
+            itemList.classList.add('hidden');
         } else {
-            itemList.classList.remove('hidden');
+            document.getElementById("packageTabs").classList.remove("hidden");
+            if (activePackageTab === "files") {
+                fileList.classList.remove('hidden');
+            } else {
+                itemList.classList.remove('hidden');
+            }
         }
 
         document.getElementById('statusBadge').innerText = "SUCCESS";
@@ -486,12 +499,12 @@ function renderItemList() {
         let partsHtml = "";
         if (item.parts && item.parts.length > 0) {
             const partRows = item.parts.map(part => `
-                <div class="flex items-center justify-between p-1.5 hover:bg-[#111116] rounded-lg border border-zinc-950 min-w-0">
+                <div class="flex items-center justify-between p-1.5 rounded-lg border border-zinc-950 min-w-0 select-none">
                     <div class="flex items-center gap-2 min-w-0 flex-1">
                         <img src="${part.icon_url}" class="w-7 h-7 object-contain rounded bg-black border border-zinc-900 flex-shrink-0" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
                         <div class="min-w-0 flex-1 text-left">
-                            <p class="text-[10px] font-bold text-zinc-300 truncate">${part.name}</p>
-                            <p class="text-[8px] text-zinc-500 font-mono">ID: ${part.id}</p>
+                            <p class="text-[10px] font-bold text-zinc-400 truncate">${part.name}</p>
+                            <p class="text-[8px] text-zinc-600 font-mono">ID: ${part.id}</p>
                         </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
@@ -521,7 +534,6 @@ function renderItemList() {
                     <div class="min-w-0 flex-1 text-left">
                         <p class="text-xs font-bold text-white leading-tight">${item.name}</p>
                         <p class="text-[9px] text-zinc-500 font-mono mt-0.5">ID: ${item.id}</p>
-                        ${item.text_id ? `<p class="text-[8px] text-zinc-600 font-mono truncate">Key: ${item.text_id}</p>` : ''}
                     </div>
                 </div>
                 <div class="flex gap-1.5 flex-shrink-0">
@@ -570,18 +582,8 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     if (sublist.children.length > 0) return;
 
     try {
-        const assetResponse = await fetch(url);
-        if (!assetResponse.ok) throw new Error("Failed downloading package bundle");
-        const assetBlob = await assetResponse.blob();
-
-        const formData = new FormData();
-        formData.append('file', assetBlob, fileName);
-        formData.append('bundle_url', url); 
-
-        const response = await fetch('/api?action=process', {
-            method: 'POST',
-            body: formData
-        });
+        // Direct stream processing loop through decryptor route mapping to stop upload overheads [1]
+        const response = await fetch(`/api?action=process&bundle_url=${encodeURIComponent(url)}`);
         const extractedData = await response.json();
         loader.style.display = "none";
 
