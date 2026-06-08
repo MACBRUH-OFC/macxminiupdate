@@ -120,7 +120,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
                     <div class="tab-btn" data-mode="manual"><i class="fa-solid fa-sliders text-[11px]"></i>Manual Lookup</div>
                 </div>
             </div>
-            
+
             <div class="flex-1 flex flex-col justify-center items-center w-full px-1 space-y-4">
                 <div id="wrapperAuto" class="w-full text-center">
                     <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">New Miniupdate Version found</span>
@@ -134,12 +134,12 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
                     <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">Enter miniupdate Version</span>
                     <input type="text" id="inputVersion" class="input-text-nexus">
                 </div>
-                
+
                 <button id="extractBtn" class="btn-mechanical w-full h-12 text-sm font-bold italic flex-shrink-0">
                     <i class="fa-solid fa-magnifying-glass" id="btnIcon"></i> <span id="btnText">Check For Updates</span>
                 </button>
             </div>
-            
+
             <div class="bg-[#0b0b10] border border-zinc-900 rounded-xl p-3 flex items-center gap-3 flex-shrink-0 min-w-0">
                 <div id="statusIcon" class="text-zinc-600 flex-shrink-0"><i class="fa-solid fa-terminal text-xs"></i></div>
                 <div class="flex-1 min-w-0 text-left">
@@ -278,7 +278,7 @@ extractBtn.onclick = async () => {
     document.getElementById('statusBadge').style.color = "var(--ff-yellow)";
     document.getElementById('statusText').innerText = "COMPARING";
     document.getElementById('statusDescText').innerText = `Comparing live patch data sizes...`;
-    
+
     document.getElementById('listEmptyState').classList.add('hidden');
     document.getElementById('listLoadingState').classList.remove('hidden');
     fileList.classList.add('hidden');
@@ -290,13 +290,13 @@ extractBtn.onclick = async () => {
         if(!data.success) throw new Error(data.message || "Failed parsing target channels.");
 
         activeCache = data.files || [];
-        
+
         document.getElementById('listLoadingState').classList.add('hidden');
         renderList(); 
-        
+
         document.getElementById('listActions').classList.remove('hidden');
         fileList.classList.remove('hidden');
-        
+
         document.getElementById('statusBadge').innerText = "SUCCESS";
         document.getElementById('statusBadge').style.color = "var(--ff-emerald)";
         document.getElementById('statusDescText').innerText = `Analysis complete! Detected updates map ready.`;
@@ -318,24 +318,24 @@ extractBtn.onclick = async () => {
 function renderList() {
     fileList.innerHTML = "";
     document.getElementById('cacheCounterText').innerText = `${activeCache.length} patch elements identified`;
-    
+
     if(activeCache.length === 0) {
         document.getElementById('listEmptyState').classList.remove('hidden');
         return;
     }
     document.getElementById('listEmptyState').classList.add('hidden');
-    
+
     activeCache.forEach((item, index) => {
         const row = document.createElement('div');
         row.className = "flex flex-col rounded-xl bg-[#0b0b0f] border border-zinc-900 overflow-hidden min-w-0 mb-1";
-        
+
         let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
         if (item.status === "Modified") {
             badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
         }
 
         row.innerHTML = `
-            <div class="flex items-center justify-between p-3 cursor-pointer hover:bg-[#111116] group" onclick="toggleAccordionTray(${index}, '${encodeURIComponent(item.url)}')">
+            <div class="flex items-center justify-between p-3 cursor-pointer hover:bg-[#111116] group" onclick="toggleAccordionTray(${index}, '${encodeURIComponent(item.url)}', '${encodeURIComponent(item.fileName)}')">
                 <div class="flex items-center gap-3 min-w-0 flex-1 text-left">
                     <div class="w-7 h-7 rounded-lg bg-black flex items-center justify-center border border-zinc-900 flex-shrink-0 text-[10px] text-zinc-500 font-bold">
                         ${index + 1}
@@ -364,12 +364,13 @@ function renderList() {
     });
 }
 
-async function toggleAccordionTray(index, encodedUrl) {
+async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     const tray = document.getElementById(`tray-${index}`);
     const arrow = document.getElementById(`arrow-${index}`);
     const sublist = document.getElementById(`sublist-${index}`);
     const loader = document.getElementById(`loader-${index}`);
     const url = decodeURIComponent(encodedUrl);
+    const fileName = decodeURIComponent(encodedFileName);
 
     if (tray.style.display === "block") {
         tray.style.display = "none";
@@ -383,16 +384,29 @@ async function toggleAccordionTray(index, encodedUrl) {
     if (sublist.children.length > 0) return;
 
     try {
-        const response = await fetch(`https://ff-asset-extractor.vercel.app/api/extract?url=${encodeURIComponent(url)}`);
+        // 1. Fetch the remote bundle file into memory as a blob
+        const assetResponse = await fetch(url);
+        if (!assetResponse.ok) throw new Error("Failed downloading package bundle");
+        const assetBlob = await assetResponse.blob();
+
+        // 2. Wrap file payload securely into a standard multipart form structure
+        const formData = new FormData();
+        formData.append('file', assetBlob, fileName);
+
+        // 3. Post data payloads straight through to the local server extraction process
+        const response = await fetch('/api/process', {
+            method: 'POST',
+            body: formData
+        });
         const extractedData = await response.json();
         loader.style.display = "none";
 
-        if (!extractedData.success || !extractedData.assets || extractedData.assets.length === 0) {
+        if (!response.ok || !extractedData.success || !extractedData.assets || extractedData.assets.length === 0) {
             sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1 text-center">No previewable asset components extracted.</div>`;
             return;
         }
 
-        extractedData.assets.forEach((asset, assetIdx) => {
+        extractedData.assets.forEach((asset) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 p-1.5 rounded cursor-pointer text-left";
             subRow.onclick = (e) => {
@@ -407,7 +421,7 @@ async function toggleAccordionTray(index, encodedUrl) {
             `;
             sublist.appendChild(subRow);
         });
-    } catch {
+    } catch (err) {
         loader.style.display = "none";
         sublist.innerHTML = `<div class="text-[9px] text-red-500 py-1 text-center">Extraction processing pipeline request error.</div>`;
     }
@@ -431,17 +445,17 @@ async function selectFile(item, element) {
 
     document.getElementById('previewFallback').classList.add('hidden');
     document.getElementById('previewContent').classList.remove('hidden');
-    
+
     const mediaBox = document.getElementById('mediaBox');
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
-    
+
     const url = item.preview_url;
     document.getElementById('singleSaveBtn').href = url;
-    
+
     mediaBox.innerHTML = `
         <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
-    
+
     const ext = item.name.split('.').pop().toLowerCase();
     const isStrictMesh = (ext === 'obj');
 
