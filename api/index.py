@@ -40,26 +40,24 @@ def get_file_info_data(version):
 
 @app.route('/api/latest-version', methods=['GET'])
 def get_latest_calculated_version():
-    """Fetches remote version safely via server context to bypass CORS"""
     try:
         res = requests.get(VERSION_API, timeout=5)
         data = res.json()
         if data.get("success") and "remote_version" in data:
             base_ver = data["remote_version"]
-            # Auto-calculate next step target (e.g., 1.123.17 -> 1.123.18)
             parts = list(map(int, base_ver.split('.')))
             parts[2] += 1
             calculated_target = ".".join(map(str, parts))
             return jsonify({"success": True, "target_version": calculated_target})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
-    return jsonify({"success": False, "message": "Invalid API structural data format"}), 500
+    return jsonify({"success": False, "message": "Invalid configuration dataset response."}), 500
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
     input_val = request.args.get('version', '').strip()
     if not input_val:
-        return jsonify({"success": False, "message": "Missing target version context"}), 400
+        return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
 
     if "http" in input_val:
         match = re.search(r'/(\d+\.\d+\.\d+)/', input_val)
@@ -68,19 +66,17 @@ def check_update():
         version = input_val
 
     if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Invalid version configuration pattern"}), 400
+        return jsonify({"success": False, "message": "Illegal version context parameters configuration"}), 400
 
-    # 1. Fetch targeted structure fileinfo asset map
     new_text, active_version = get_file_info_data(version)
     
-    # JUMP AUTOCORRECTION MECHANISM: If targeted 18 isn't live yet, fallback context seamlessly drops to 17
+    # Intelligently step back down an index number if target index is completely unallocated on server storage space yet.
     if not new_text:
         fallback_ver = get_previous_version(version)
         new_text, active_version = get_file_info_data(fallback_ver)
         if not new_text:
-            return jsonify({"success": False, "message": "Requested updates not yet structured on target CDN servers"}), 404
+            return jsonify({"success": False, "message": "Target branch index map data records completely absent on cloud servers"}), 404
 
-    # 2. Extract comparative differences against its baseline previous element 
     prev_version = get_previous_version(active_version)
     old_text, _ = get_file_info_data(prev_version)
 
