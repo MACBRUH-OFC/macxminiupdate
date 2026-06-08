@@ -13,6 +13,7 @@ VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract/bundle"
 
 # Local Persistent Session Cache Map (Saves raw data assets in Server RAM)
+# Stays perfectly intact throughout the session until the server process resets
 MEMORY_ASSET_CACHE = {}
 
 def get_previous_version(version_str):
@@ -69,10 +70,9 @@ def get_latest_calculated_version():
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
-    # Flushes local runtime cache memory on fresh radar scans to keep performance optimized
-    global MEMORY_ASSET_CACHE
-    MEMORY_ASSET_CACHE.clear()
-
+    # REMOVED: MEMORY_ASSET_CACHE.clear() has been eliminated so extraction items 
+    # remain persistently available throughout your entire runtime session.
+    
     input_val = request.args.get('version', '').strip()
     if not input_val:
         return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
@@ -191,11 +191,23 @@ def process_file():
                 # Instantly download and capture raw structure layers before Vercel drops them
                 asset_file_response = requests.get(remote_preview_url, timeout=15)
                 if asset_file_response.status_code == 200:
+                    
+                    # Read the raw bytes safely
+                    raw_bytes = asset_file_response.content
+                    filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
+                    detected_content_type = asset_file_response.headers.get("Content-Type")
+
+                    # Force correct content type for common text assets if headers show application/octet-stream
+                    if filename_str.endswith('.json'):
+                        detected_content_type = 'application/json'
+                    elif filename_str.endswith('.manifest') or filename_str.endswith('.txt'):
+                        detected_content_type = 'text/plain'
+
                     # Save the raw binary content in server RAM mapped to our clean UUID link
                     MEMORY_ASSET_CACHE[local_cache_token] = {
-                        "content": asset_file_response.content,
-                        "filename": asset.get("name") or asset.get("fileName") or "extracted_file",
-                        "content_type": asset_file_response.headers.get("Content-Type")
+                        "content": raw_bytes,
+                        "filename": filename_str,
+                        "content_type": detected_content_type
                     }
                     
                     # Point the frontend to view directly through our persistent local python cache route
@@ -222,19 +234,32 @@ def stream_cached_asset_layer(token):
 
     # Dynamically determine strict audio/video headers to enable timeline scrubbing
     mime_type = cached_item["content_type"]
+    filename_lower = cached_item["filename"].lower()
+    
     if not mime_type or mime_type == 'application/octet-stream':
         mime_type, _ = mimetypes.guess_type(cached_item["filename"])
-        if not mime_type:
-            # Safe layout fallback markers for game engine audio layers
-            if cached_item["filename"].endswith('.ogg'): mime_type = 'audio/ogg'
-            elif cached_item["filename"].endswith('.mp3'): mime_type = 'audio/mpeg'
-            elif cached_item["filename"].endswith('.mp4'): mime_type = 'video/mp4'
-            else: mime_type = 'application/octet-stream'
+        
+    # Absolute strict clean overrides for config assets and basic media links
+    if filename_lower.endswith('.json'):
+        mime_type = 'application/json'
+    elif filename_lower.endswith('.manifest') or filename_lower.endswith('.txt') or filename_lower.endswith('.atlas'):
+        mime_type = 'text/plain'
+    elif filename_lower.endswith('.ogg'):
+        mime_type = 'audio/ogg'
+    elif filename_lower.endswith('.mp3'):
+        mime_type = 'audio/mpeg'
+    elif filename_lower.endswith('.mp4'):
+        mime_type = 'video/mp4'
+    elif not mime_type:
+        mime_type = 'application/octet-stream'
 
     # Build and emit response straight from local runtime memory structure
     response = Response(cached_item["content"], mimetype=mime_type)
     response.headers["Content-Disposition"] = f'inline; filename="{cached_item["filename"]}"'
     response.headers["Accept-Ranges"] = "bytes"
+    
+    # Enable global reading access to avoid strict browser CORS interception
+    response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
 if __name__ == '__main__':
