@@ -4,6 +4,8 @@ import requests
 import re
 import uuid
 import mimetypes
+import base64
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -12,9 +14,27 @@ BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract/bundle"
 
-# Local Persistent Session Cache Map (Saves raw data assets in Server RAM)
-# Stays perfectly intact throughout the session until the server process resets
+# Backwards compatible RAM cache fallback
 MEMORY_ASSET_CACHE = {}
+
+def encode_token(remote_url, filename, content_type):
+    data = {
+        "url": remote_url,
+        "filename": filename,
+        "content_type": content_type
+    }
+    json_bytes = json.dumps(data).encode('utf-8')
+    return base64.urlsafe_b64encode(json_bytes).decode('utf-8')
+
+def decode_token(token):
+    try:
+        padding_needed = len(token) % 4
+        if padding_needed:
+            token += '=' * (4 - padding_needed)
+        json_bytes = base64.urlsafe_b64decode(token.encode('utf-8'))
+        return json.loads(json_bytes.decode('utf-8'))
+    except Exception as e:
+        return None
 
 def get_previous_version(version_str):
     try:
@@ -70,9 +90,6 @@ def get_latest_calculated_version():
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
-    # REMOVED: MEMORY_ASSET_CACHE.clear() has been eliminated so extraction items 
-    # remain persistently available throughout your entire runtime session.
-    
     input_val = request.args.get('version', '').strip()
     if not input_val:
         return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
@@ -156,7 +173,6 @@ def check_update():
 
 @app.route('/api/process', methods=['POST'])
 def process_file():
-    global MEMORY_ASSET_CACHE
     if 'file' not in request.files:
         return jsonify({"success": False, "message": "No file uploaded"}), 400
 
@@ -169,7 +185,6 @@ def process_file():
     }
 
     try:
-        # 1. Ship bundle data block over to Vercel architecture parser engine
         response = requests.post(EXTRACTOR_API_URL, files=files, timeout=45)
         extractor_data = response.json()
 
@@ -177,69 +192,75 @@ def process_file():
             return jsonify(extractor_data), response.status_code
 
         assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
-        
-        # 2. Intercept extracted files payload and cache actual content strings into local memory
+
+        # Map each extracted component dynamically to stateless tokens
         for asset in assets_list:
             remote_preview_url = asset.get("preview_url") or asset.get("url")
             if not remote_preview_url:
                 continue
 
-            # Generate a secure, persistent tracking hash token for this asset component
-            local_cache_token = str(uuid.uuid4())
+            filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
+            
+            # Match standard mime-types
+            detected_content_type = 'application/octet-stream'
+            if filename_str.endswith('.json'):
+                detected_content_type = 'application/json'
+            elif filename_str.endswith('.manifest') or filename_str.endswith('.txt') or filename_str.endswith('.atlas'):
+                detected_content_type = 'text/plain'
+            elif filename_str.endswith('.ogg'):
+                detected_content_type = 'audio/ogg'
+            elif filename_str.endswith('.mp3'):
+                detected_content_type = 'audio/mpeg'
+            elif filename_str.endswith('.mp4'):
+                detected_content_type = 'video/mp4'
 
-            try:
-                # Instantly download and capture raw structure layers before Vercel drops them
-                asset_file_response = requests.get(remote_preview_url, timeout=15)
-                if asset_file_response.status_code == 200:
-                    
-                    # Read the raw bytes safely
-                    raw_bytes = asset_file_response.content
-                    filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
-                    detected_content_type = asset_file_response.headers.get("Content-Type")
+            # Build stateless token to allow persistent routing downloads across any infrastructure
+            local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type)
 
-                    # Force correct content type for common text assets if headers show application/octet-stream
-                    if filename_str.endswith('.json'):
-                        detected_content_type = 'application/json'
-                    elif filename_str.endswith('.manifest') or filename_str.endswith('.txt'):
-                        detected_content_type = 'text/plain'
-
-                    # Save the raw binary content in server RAM mapped to our clean UUID link
-                    MEMORY_ASSET_CACHE[local_cache_token] = {
-                        "content": raw_bytes,
-                        "filename": filename_str,
-                        "content_type": detected_content_type
-                    }
-                    
-                    # Point the frontend to view directly through our persistent local python cache route
-                    local_proxy_route = f"/api/stream-cache/{local_cache_token}"
-                    if "preview_url" in asset: asset["preview_url"] = local_proxy_route
-                    if "url" in asset: asset["url"] = local_proxy_route
-            except Exception as inner_err:
-                print(f"Error caching asset chunk data stream: {inner_err}")
-                continue
+            local_proxy_route = f"/api/stream-cache/{local_cache_token}"
+            if "preview_url" in asset: asset["preview_url"] = local_proxy_route
+            if "url" in asset: asset["url"] = local_proxy_route
 
         return jsonify(extractor_data), 200
-        
+
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
 
-# Completely independent ultra-stable streaming channel to serve cached objects straight from RAM
 @app.route('/api/stream-cache/<token>', methods=['GET'])
 def stream_cached_asset_layer(token):
+    # 1. Attempt stateless decoding from token properties
+    decoded = decode_token(token)
+    if decoded:
+        remote_url = decoded["url"]
+        filename = decoded["filename"]
+        mime_type = decoded["content_type"]
+
+        try:
+            res = requests.get(remote_url, timeout=15, stream=True)
+            if res.status_code == 200:
+                response = Response(res.content, mimetype=mime_type)
+                response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+                response.headers["Accept-Ranges"] = "bytes"
+                response.headers["Access-Control-Allow-Origin"] = "*"
+                return response
+            else:
+                return f"Remote host extraction responded with status: {res.status_code}", res.status_code
+        except Exception as e:
+            return f"Remote connection gateway failure: {str(e)}", 502
+
+    # 2. Stateful fallback to local RAM cache
     global MEMORY_ASSET_CACHE
     cached_item = MEMORY_ASSET_CACHE.get(token)
-    
-    if not cached_item:
-        return f"Asset Token Stream Key Expired or Modified out of Server Range Layer.", 404
 
-    # Dynamically determine strict audio/video headers to enable timeline scrubbing
+    if not cached_item:
+        return "Asset Token Stream Key Expired, invalid or no longer cached in memory.", 404
+
     mime_type = cached_item["content_type"]
     filename_lower = cached_item["filename"].lower()
-    
+
     if not mime_type or mime_type == 'application/octet-stream':
         mime_type, _ = mimetypes.guess_type(cached_item["filename"])
-        
-    # Absolute strict clean overrides for config assets and basic media links
+
     if filename_lower.endswith('.json'):
         mime_type = 'application/json'
     elif filename_lower.endswith('.manifest') or filename_lower.endswith('.txt') or filename_lower.endswith('.atlas'):
@@ -253,12 +274,9 @@ def stream_cached_asset_layer(token):
     elif not mime_type:
         mime_type = 'application/octet-stream'
 
-    # Build and emit response straight from local runtime memory structure
     response = Response(cached_item["content"], mimetype=mime_type)
     response.headers["Content-Disposition"] = f'inline; filename="{cached_item["filename"]}"'
     response.headers["Accept-Ranges"] = "bytes"
-    
-    # Enable global reading access to avoid strict browser CORS interception
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
