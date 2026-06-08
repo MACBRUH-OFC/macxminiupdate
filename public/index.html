@@ -280,6 +280,13 @@ function computeByteScale(bytes) {
     return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + ['Bytes', 'KB', 'MB', 'GB'][i];
 }
 
+function encodeBase64Url(str) {
+    return btoa(unescape(encodeURIComponent(str)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
 extractBtn.onclick = async () => {
     let targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
     if(!targetVersion || targetVersion === "Offline" || targetVersion === "Error") {
@@ -419,6 +426,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
+        formData.append('bundle_url', url); // Pass original Free Fire CDN URL to the stateless parser
 
         // Fetch through unified query endpoint mapping
         const response = await fetch('/api?action=process', {
@@ -674,7 +682,8 @@ async function selectFile(item, element) {
 function interceptDownloadZip(e, encodedUrl) {
     e.stopPropagation();
     const url = decodeURIComponent(encodedUrl);
-    window.open(`https://ff-asset-extractor.vercel.app/api/extract?url=${encodeURIComponent(url)}&download_type=zip`, '_blank');
+    const encodedBundleUrl = encodeBase64Url(url);
+    window.open(`https://ff-asset-extractor.vercel.app/api/extract?bundle_url=${encodedBundleUrl}&download_type=zip`, '_blank');
 }
 
 function downloadMasterBulkZip() {
