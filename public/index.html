@@ -398,7 +398,6 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         const extractedData = await response.json();
         loader.style.display = "none";
 
-        // Removed strict validation blocks to ensure any type parsing is rendered cleanly
         let targets = extractedData.assets || extractedData.files || [];
         if (!response.ok || targets.length === 0) {
             sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1 text-center">No previewable asset components extracted.</div>`;
@@ -434,7 +433,6 @@ function getIcon(label, filename = "") {
     const l = label.toLowerCase();
     const ext = filename.split('.').pop().toLowerCase();
     
-    // Exact mapping for all 12 requested categories
     if(l.includes('texture') || ext === 'png' && !l.includes('sprite')) return 'fa-image text-yellow-500';
     if(l.includes('spriteatlas') || ext === 'atlas' || filename.includes('.atlas.txt')) return 'fa-boxes-stacked text-amber-400';
     if(l.includes('sprite') || ext === 'png') return 'fa-file-image text-orange-400';
@@ -489,7 +487,7 @@ async function selectFile(item, element) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <img src="${url}" class="pixelated-render">
+                    <img src="${url}" class="pixelated-render" onerror="handlePreviewStreamError(this, '${encodeURIComponent(item.name)}')">
                 </div>
             </div>`;
     } 
@@ -501,7 +499,7 @@ async function selectFile(item, element) {
                     <div id="videoCenterOverlay" class="center-play-overlay">
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
-                    <video id="customVideoPlayer" src="${url}" class="w-full h-full object-contain"></video>
+                    <video id="customVideoPlayer" src="${url}" class="w-full h-full object-contain" onerror="handlePreviewStreamError(this, '${encodeURIComponent(item.name)}')"></video>
                 </div>
                 <div class="custom-control-bar">
                     <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
@@ -522,7 +520,7 @@ async function selectFile(item, element) {
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
                     <canvas id="audioVisualizerCanvas"></canvas>
-                    <audio id="customAudioPlayer" src="${url}" crossorigin="anonymous" class="hidden"></audio>
+                    <audio id="customAudioPlayer" src="${url}" crossorigin="anonymous" class="hidden" onerror="handlePreviewStreamError(this, '${encodeURIComponent(item.name)}')"></audio>
                 </div>
                 <div class="custom-control-bar">
                     <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
@@ -536,10 +534,11 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
-    // Fallback Interface Loader for Text, Blueprints, Configurations, Scripts, Hierarchy Nodes & Fonts
+    // Configuration / Fallback Text Display Pipelines
     else {
         try {
             const r = await fetch(url);
+            if (!r.ok) throw new Error();
             const txt = await r.text();
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
@@ -548,10 +547,34 @@ async function selectFile(item, element) {
                     </div>
                 </div>`;
         } catch {
-            mediaBox.innerHTML = `
-                <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh text-zinc-800"><i class="fa-solid fa-file-circle-exclamation text-xl"></i></div></div>`;
+            displayStreamFallbackBox(mediaBox, item.name);
         }
     }
+}
+
+// Absolute Vercel NOT_FOUND Recovery Handler Interceptor
+function handlePreviewStreamError(htmlElement, encodedFilename) {
+    const filename = decodeURIComponent(encodedFilename);
+    const mediaBox = document.getElementById('mediaBox');
+    if (mediaBox) {
+        displayStreamFallbackBox(mediaBox, filename);
+    }
+}
+
+function displayStreamFallbackBox(container, filename) {
+    container.innerHTML = `
+        <div class="custom-player-wrapper h-full">
+            <div class="aspect-16-9-viewport full-viewport-mesh flex flex-col items-center justify-center p-6 text-center bg-[#07070b]">
+                <div class="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-amber-500 mb-3 shadow-md animate-bounce">
+                    <i class="fa-solid fa-circle-exclamation text-lg"></i>
+                </div>
+                <span class="text-[11px] font-black uppercase tracking-wider text-zinc-300 gff">Direct Access Blueprint Stream</span>
+                <p class="text-[10px] text-zinc-500 max-w-[260px] mt-1 mb-4 leading-relaxed">The active extractor sandbox limits live inline playback for this specific raw structure layer.</p>
+                <button onclick="window.open(document.getElementById('singleSaveBtn').href, '_blank')" class="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-yellow-500/30 rounded-lg text-[10px] font-bold tracking-wide uppercase text-yellow-500 transition-all flex items-center gap-2">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Open In Direct Extractor Channel
+                </button>
+            </div>
+        </div>`;
 }
 
 function interceptDownloadZip(e, encodedUrl) {
@@ -614,7 +637,7 @@ function initBabylonMeshScene(canvasId, modelUrl, filename) {
             mesh.position.subtractInPlace(computedCenter);
             mesh.scaling = new BABYLON.Vector3(targetScaleFactor, targetScaleFactor, targetScaleFactor);
         });
-    }, function() {}, function() {}, ".obj");
+    }, function() {}, function(scene, message) { handlePreviewStreamError(null, encodeURIComponent(filename)); }, ".obj");
     babylonEngine.runRenderLoop(() => { if (babylonScene) babylonScene.render(); });
     window.addEventListener("resize", resizeBabylonViewportMatrix, false);
 }
