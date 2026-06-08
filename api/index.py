@@ -169,12 +169,18 @@ def process_file_logic():
     if uploaded_file.filename == '':
         return jsonify({"success": False, "message": "Empty filename header sent"}), 400
 
+    # Retrieve original bundle URL from form parameters
+    bundle_url = request.form.get('bundle_url', '')
+
     files = {
         'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
     }
+    data = {
+        'bundle_url': bundle_url
+    }
 
     try:
-        response = requests.post(EXTRACTOR_API_URL, files=files, timeout=45)
+        response = requests.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
         extractor_data = response.json()
 
         if not response.ok or not extractor_data.get("success"):
@@ -187,6 +193,10 @@ def process_file_logic():
             remote_preview_url = asset.get("preview_url") or asset.get("url")
             if not remote_preview_url:
                 continue
+
+            # Convert relative path schema from extractor to absolute address format
+            if remote_preview_url.startswith('/'):
+                remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
 
             filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
             
