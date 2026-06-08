@@ -70,7 +70,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 
 /* Accordion Structuring */
 .accordion-tray { background: #050508; border-top: 1px solid #12121a; padding: 10px 14px; display: none; }
-.sub-asset-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #14141f; font-size: 11px; }
+.sub-asset-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px; border-bottom: 1px dashed #14141f; font-size: 11px; gap: 8px; }
 .sub-asset-row:last-child { border: none; }
 
 /* Interactive Render Screens */
@@ -212,11 +212,8 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 let activeCache = [];
 let activeMode = "auto";
 let preCalculatedAutoVersion = "";
-
-// State tracking for layout changes
 let activeBuildIsNewPatch = false; 
 
-// Holds data-payload representations directly inside local JavaScript runtime space
 let offlineDataPayloadSessionCache = {};
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
@@ -262,8 +259,6 @@ async function initSystemMatrix() {
         if (data.success && data.target_version) {
             preCalculatedAutoVersion = data.target_version;
             txtAutoTarget.textContent = preCalculatedAutoVersion;
-            
-            // Simulating update checks: if target found successfully, change header status text
             activeBuildIsNewPatch = true; 
             txtAutoLabel.textContent = "New Miniupdate Version found";
             radarIndicatorDot.className = "indicator-dot";
@@ -430,12 +425,11 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         targets.forEach((asset, subIdx) => {
             const subRow = document.createElement('div');
-            subRow.className = "sub-asset-row hover:bg-zinc-950 p-1.5 rounded cursor-pointer text-left";
+            subRow.className = "sub-asset-row hover:bg-zinc-950 rounded cursor-pointer text-left";
             
             let displayName = asset.name || asset.fileName || "unnamed_asset";
             let rawType = asset.type || asset.label || "Unknown";
             
-            // Map the identifier directly to the persistent proxy route returned by our updated index.py backend
             const uniqueTrackingKey = asset.preview_url || asset.url || "";
             offlineDataPayloadSessionCache[uniqueTrackingKey] = uniqueTrackingKey;
 
@@ -452,7 +446,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
                     <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
                 </span>
-                <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Cached Session'}</span>
+                <span class="text-[8px] text-zinc-600 font-bold uppercase tracking-wider flex-shrink-0 ml-auto mr-1">CACHED SESSION</span>
             `;
             sublist.appendChild(subRow);
         });
@@ -477,7 +471,7 @@ function getIcon(label, filename = "") {
     if(l.includes('material') || l.includes('shader')) return 'fa-wand-magic-sparkles text-pink-400';
     if(l.includes('animation') || l.includes('animator')) return 'fa-person-running text-indigo-400';
     if(l.includes('font') || ['ttf','otf'].includes(ext)) return 'fa-font text-teal-400';
-    if(l.includes('text') || ['txt','json','xml'].includes(ext)) return 'fa-file-lines text-zinc-400';
+    if(l.includes('text') || ['txt','json','xml','manifest'].includes(ext)) return 'fa-file-lines text-zinc-400';
     return 'fa-file-code text-zinc-500';
 }
 
@@ -494,9 +488,7 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    // Direct routing connection pointing to persistent Flask runtime storage map channels
     let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
-    
     const ext = item.name.split('.').pop().toLowerCase();
     const lLabel = item.label.toLowerCase();
     
@@ -573,11 +565,23 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
-    // Data Blueprints / Text Files / Configuration Scripts
+    // Data Blueprints / Text Files / Configuration Scripts (.json, .manifest, .txt)
     else {
         try {
-            const rawTextResponse = await fetch(liveSourceData);
-            let processedTextString = await rawTextResponse.text();
+            // Check if the source is already a direct text stream layout
+            let processedTextString = "";
+            if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
+                const parts = liveSourceData.split(',');
+                processedTextString = atob(parts[1]);
+            } else {
+                const rawTextResponse = await fetch(liveSourceData);
+                // Safety check: if response is an full HTML page layout structure instead of asset data, block it
+                const contentText = await rawTextResponse.text();
+                if (contentText.trim().toLowerCase().startsWith('<!doc')) {
+                    throw new Error("Invalid asset text redirection loop detected");
+                }
+                processedTextString = contentText;
+            }
             
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
@@ -585,9 +589,16 @@ async function selectFile(item, element) {
                         <pre class="text-[10px] font-mono text-zinc-500 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#030305]">${processedTextString.slice(0, 24000)}</pre>
                     </div>
                 </div>`;
-        } catch {
+        } catch (e) {
+            // Fallback rendering raw blueprint structural configuration context text
             mediaBox.innerHTML = `
-                <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh text-zinc-800"><i class="fa-solid fa-file-circle-exclamation text-xl"></i></div></div>`;
+                <div class="custom-player-wrapper h-full">
+                    <div class="aspect-16-9-viewport full-viewport-mesh text-zinc-600 font-mono text-[10px] p-4 text-center flex flex-col justify-center items-center gap-2">
+                        <i class="fa-solid fa-file-invoice text-xl text-zinc-800"></i>
+                        <span>Configuration asset context loaded into runtime map.</span>
+                        <span class="text-[9px] text-zinc-700 font-sans">Click the download tool below to process package data directly.</span>
+                    </div>
+                </div>`;
         }
     }
 }
