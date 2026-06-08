@@ -426,7 +426,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
-        formData.append('bundle_url', url); // Pass original Free Fire CDN URL to the stateless parser
+        formData.append('bundle_url', url); // Append original bundle CDN URL [1]
 
         // Fetch through unified query endpoint mapping
         const response = await fetch('/api?action=process', {
