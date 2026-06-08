@@ -1,7 +1,9 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 import requests
 import re
+import uuid
+import mimetypes
 
 app = Flask(__name__)
 CORS(app)
@@ -9,6 +11,9 @@ CORS(app)
 BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract/bundle"
+
+# Local Persistent Session Cache Map (Saves raw data assets in Server RAM)
+MEMORY_ASSET_CACHE = {}
 
 def get_previous_version(version_str):
     try:
@@ -64,6 +69,10 @@ def get_latest_calculated_version():
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
+    # Flushes local runtime cache memory on fresh radar scans to keep performance optimized
+    global MEMORY_ASSET_CACHE
+    MEMORY_ASSET_CACHE.clear()
+
     input_val = request.args.get('version', '').strip()
     if not input_val:
         return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
@@ -147,22 +156,86 @@ def check_update():
 
 @app.route('/api/process', methods=['POST'])
 def process_file():
+    global MEMORY_ASSET_CACHE
     if 'file' not in request.files:
         return jsonify({"success": False, "message": "No file uploaded"}), 400
-        
+
     uploaded_file = request.files['file']
     if uploaded_file.filename == '':
         return jsonify({"success": False, "message": "Empty filename header sent"}), 400
-    
+
     files = {
         'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
     }
-    
+
     try:
+        # 1. Ship bundle data block over to Vercel architecture parser engine
         response = requests.post(EXTRACTOR_API_URL, files=files, timeout=45)
-        return jsonify(response.json()), response.status_code
+        extractor_data = response.json()
+
+        if not response.ok or not extractor_data.get("success"):
+            return jsonify(extractor_data), response.status_code
+
+        assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
+        
+        # 2. Intercept extracted files payload and cache actual content strings into local memory
+        for asset in assets_list:
+            remote_preview_url = asset.get("preview_url") or asset.get("url")
+            if not remote_preview_url:
+                continue
+
+            # Generate a secure, persistent tracking hash token for this asset component
+            local_cache_token = str(uuid.uuid4())
+
+            try:
+                # Instantly download and capture raw structure layers before Vercel drops them
+                asset_file_response = requests.get(remote_preview_url, timeout=15)
+                if asset_file_response.status_code == 200:
+                    # Save the raw binary content in server RAM mapped to our clean UUID link
+                    MEMORY_ASSET_CACHE[local_cache_token] = {
+                        "content": asset_file_response.content,
+                        "filename": asset.get("name") or asset.get("fileName") or "extracted_file",
+                        "content_type": asset_file_response.headers.get("Content-Type")
+                    }
+                    
+                    # Point the frontend to view directly through our persistent local python cache route
+                    local_proxy_route = f"/api/stream-cache/{local_cache_token}"
+                    if "preview_url" in asset: asset["preview_url"] = local_proxy_route
+                    if "url" in asset: asset["url"] = local_proxy_route
+            except Exception as inner_err:
+                print(f"Error caching asset chunk data stream: {inner_err}")
+                continue
+
+        return jsonify(extractor_data), 200
+        
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
+
+# Completely independent ultra-stable streaming channel to serve cached objects straight from RAM
+@app.route('/api/stream-cache/<token>', methods=['GET'])
+def stream_cached_asset_layer(token):
+    global MEMORY_ASSET_CACHE
+    cached_item = MEMORY_ASSET_CACHE.get(token)
+    
+    if not cached_item:
+        return f"Asset Token Stream Key Expired or Modified out of Server Range Layer.", 404
+
+    # Dynamically determine strict audio/video headers to enable timeline scrubbing
+    mime_type = cached_item["content_type"]
+    if not mime_type or mime_type == 'application/octet-stream':
+        mime_type, _ = mimetypes.guess_type(cached_item["filename"])
+        if not mime_type:
+            # Safe layout fallback markers for game engine audio layers
+            if cached_item["filename"].endswith('.ogg'): mime_type = 'audio/ogg'
+            elif cached_item["filename"].endswith('.mp3'): mime_type = 'audio/mpeg'
+            elif cached_item["filename"].endswith('.mp4'): mime_type = 'video/mp4'
+            else: mime_type = 'application/octet-stream'
+
+    # Build and emit response straight from local runtime memory structure
+    response = Response(cached_item["content"], mimetype=mime_type)
+    response.headers["Content-Disposition"] = f'inline; filename="{cached_item["filename"]}"'
+    response.headers["Accept-Ranges"] = "bytes"
+    return response
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
