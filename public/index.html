@@ -23,7 +23,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 .main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
 @media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
-/* Uniform Height Panels with Clean Center Flexing */
+/* Uniform Panels */
 .uniform-panel { 
     background: #09090d; border: 1px solid #181822; position: relative; 
     box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 530px; display: flex; 
@@ -44,7 +44,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 .panel-body { padding: 22px; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 .scrollable-content-box { flex: 1; background: #040406; border: 1px solid #13131a; border-radius: 14px; overflow: hidden; position: relative; }
 
-/* Straightforward Interface Controls */
+/* Mechanical Interface Elements */
 .tab-row { display: flex; background: #0f0f14; padding: 4px; border-radius: 10px; border: 1px solid #1b1b24; gap: 4px; width: 100%; }
 .tab-btn { flex: 1; text-align: center; padding: 10px 4px; font-size: 12px; font-weight: 700; color: #8e8e93; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .tab-btn:hover { color: #fff; background: #14141c; }
@@ -54,7 +54,6 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 .btn-mechanical:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #bfa600; }
 .btn-mechanical:disabled { background: #222226 !important; color: #55555c !important; box-shadow: 0 5px 0 #141416 !important; cursor: not-allowed; transform: none !important; opacity: 0.8; }
 
-/* Updated Display Container and Input UI elements */
 .display-box-nexus { width: 100%; padding: 16px; border: 1px solid #1e1e2b; border-radius: 14px; background: #040406; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 800; font-size: 20px; font-family: 'Inter', sans-serif; letter-spacing: 0.05em; }
 .indicator-dot { width: 10px; height: 10px; background: var(--ff-emerald); border-radius: 50%; box-shadow: 0 0 12px var(--ff-emerald); animation: pulseDot 2s infinite; }
 
@@ -67,12 +66,12 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 .input-text-nexus { width: 100%; padding: 16px; border: 1px solid #222230; border-radius: 14px; font-size: 18px; font-weight: 700; background: #040406; color: #fff; text-align: center; outline: none; transition: all 0.2s; font-family: 'Inter', sans-serif; letter-spacing: 0.05em; }
 .input-text-nexus:focus { border-color: var(--ff-yellow); background: #07070b; box-shadow: 0 0 15px rgba(255, 222, 0, 0.1); }
 
-/* Accordion Rows */
+/* Accordion Structuring */
 .accordion-tray { background: #050508; border-top: 1px solid #12121a; padding: 10px 14px; display: none; }
 .sub-asset-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #14141f; font-size: 11px; }
 .sub-asset-row:last-child { border: none; }
 
-/* Content Canvas viewports */
+/* Interactive Render Screens */
 .aspect-16-9-viewport { width: 100%; height: 100%; background: #020203; border-radius: 10px; border: 1px solid #101016; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; flex: 1; }
 @media (min-width: 400px) { .aspect-16-9-viewport { aspect-ratio: 16 / 9; height: auto; } }
 .full-viewport-mesh { height: 100% !important; aspect-ratio: auto !important; }
@@ -197,7 +196,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
                             <p id="mediaTitle" class="text-[11px] font-bold text-zinc-300 truncate">Asset File</p>
                             <p id="mediaTypeLabel" class="text-[8px] font-black text-zinc-600 uppercase gff tracking-wider">Type</p>
                         </div>
-                        <a id="singleSaveBtn" href="#" target="_blank" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-yellow-500 transition-all flex-shrink-0">
+                        <a id="singleSaveBtn" href="#" download class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-yellow-500 transition-all flex-shrink-0">
                             <i class="fa-solid fa-download text-xs"></i>
                         </a>
                     </div>
@@ -211,6 +210,9 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 let activeCache = [];
 let activeMode = "auto";
 let preCalculatedAutoVersion = "";
+
+// Dedicated Persistent Store for Browser Blobs
+let persistentBlobSessionCache = {};
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
@@ -407,13 +409,26 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         targets.forEach((asset) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 p-1.5 rounded cursor-pointer text-left";
-            subRow.onclick = (e) => {
-                e.stopPropagation();
-                selectFile({ name: asset.name || asset.fileName, label: asset.type || asset.label || "Asset File", preview_url: asset.preview_url || asset.url }, subRow);
-            };
             
             let displayName = asset.name || asset.fileName || "unnamed_asset";
             let rawType = asset.type || asset.label || "Unknown";
+            let fallbackNetworkUrl = asset.preview_url || asset.url;
+
+            // Generate an isolated local Unique ID for safety map tracking
+            const assetUniqueId = `asset_${index}_${Math.random().toString(36).substr(2, 9)}`;
+            
+            // Background thread intercepts and caches data structures into memory immediately
+            preloadAndLocalizeAssetBlob(fallbackNetworkUrl, assetUniqueId, rawType);
+
+            subRow.onclick = (e) => {
+                e.stopPropagation();
+                selectFile({ 
+                    id: assetUniqueId,
+                    name: displayName, 
+                    label: rawType, 
+                    fallback_url: fallbackNetworkUrl 
+                }, subRow);
+            };
             
             subRow.innerHTML = `
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
@@ -426,6 +441,28 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     } catch (err) {
         loader.style.display = "none";
         sublist.innerHTML = `<div class="text-[9px] text-red-500 py-1 text-center">Extraction processing pipeline request error.</div>`;
+    }
+}
+
+// Intercepts network objects instantly to store files locally in memory
+async function preloadAndLocalizeAssetBlob(networkUrl, uniqueId, rawType) {
+    try {
+        const res = await fetch(networkUrl);
+        if(!res.ok) throw new Error();
+        const blobData = await res.blob();
+        
+        // Rewrite Content-Type header filters for raw audio layers to prevent system conflicts
+        let directType = blobData.type;
+        if(rawType.toLowerCase().includes('audio') && !directType) directType = 'audio/ogg';
+        if(rawType.toLowerCase().includes('video') && !directType) directType = 'video/mp4';
+        
+        const strictBlob = new Blob([blobData], { type: directType });
+        const localizedBlobUrl = URL.createObjectURL(strictBlob);
+        
+        persistentBlobSessionCache[uniqueId] = localizedBlobUrl;
+    } catch {
+        // Fallback reference tracking points directly to original network URL
+        persistentBlobSessionCache[uniqueId] = networkUrl;
     }
 }
 
@@ -461,8 +498,12 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    const url = item.preview_url;
-    document.getElementById('singleSaveBtn').href = url;
+    // Use our persistent memory address block pointer instead of remote Vercel links
+    const targetSourceUrl = persistentBlobSessionCache[item.id] || item.fallback_url;
+    
+    const saveBtn = document.getElementById('singleSaveBtn');
+    saveBtn.href = targetSourceUrl;
+    saveBtn.setAttribute('download', item.name);
 
     mediaBox.innerHTML = `
         <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
@@ -472,7 +513,7 @@ async function selectFile(item, element) {
     
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Interactive 3D Modeler Pipeline
+    // Interactive 3D Mesh Modeler
     if (ext === 'obj' || lLabel.includes('mesh')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
@@ -480,18 +521,18 @@ async function selectFile(item, element) {
                     <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
-        initBabylonMeshScene("babylonAssetCanvas", url, item.name);
+        initBabylonMeshScene("babylonAssetCanvas", targetSourceUrl, item.name);
     } 
-    // Image, Sprite & Texture Pipelines
+    // Image / Sprite Sheets
     else if(['png','jpg','jpeg','webp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <img src="${url}" class="pixelated-render" onerror="handlePreviewStreamError(this, '${encodeURIComponent(item.name)}')">
+                    <img src="${targetSourceUrl}" class="pixelated-render">
                 </div>
             </div>`;
     } 
-    // High-Performance Media Player Pipelines
+    // Video Clip Engines
     else if(['mp4','mkv','webm'].includes(ext) || lLabel.includes('video')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
@@ -499,7 +540,7 @@ async function selectFile(item, element) {
                     <div id="videoCenterOverlay" class="center-play-overlay">
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
-                    <video id="customVideoPlayer" src="${url}" class="w-full h-full object-contain" onerror="handlePreviewStreamError(this, '${encodeURIComponent(item.name)}')"></video>
+                    <video id="customVideoPlayer" src="${targetSourceUrl}" class="w-full h-full object-contain"></video>
                 </div>
                 <div class="custom-control-bar">
                     <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
@@ -512,7 +553,9 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initCustomVideoController();
-    } else if(['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
+    } 
+    // Audio Clips & Sound Effects
+    else if(['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -520,7 +563,7 @@ async function selectFile(item, element) {
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
                     <canvas id="audioVisualizerCanvas"></canvas>
-                    <audio id="customAudioPlayer" src="${url}" crossorigin="anonymous" class="hidden" onerror="handlePreviewStreamError(this, '${encodeURIComponent(item.name)}')"></audio>
+                    <audio id="customAudioPlayer" src="${targetSourceUrl}" crossorigin="anonymous" class="hidden"></audio>
                 </div>
                 <div class="custom-control-bar">
                     <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
@@ -534,11 +577,10 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
-    // Configuration / Fallback Text Display Pipelines
+    // Text Blueprints / Scripts / Configurations
     else {
         try {
-            const r = await fetch(url);
-            if (!r.ok) throw new Error();
+            const r = await fetch(targetSourceUrl);
             const txt = await r.text();
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
@@ -547,34 +589,10 @@ async function selectFile(item, element) {
                     </div>
                 </div>`;
         } catch {
-            displayStreamFallbackBox(mediaBox, item.name);
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh text-zinc-800"><i class="fa-solid fa-file-circle-exclamation text-xl"></i></div></div>`;
         }
     }
-}
-
-// Absolute Vercel NOT_FOUND Recovery Handler Interceptor
-function handlePreviewStreamError(htmlElement, encodedFilename) {
-    const filename = decodeURIComponent(encodedFilename);
-    const mediaBox = document.getElementById('mediaBox');
-    if (mediaBox) {
-        displayStreamFallbackBox(mediaBox, filename);
-    }
-}
-
-function displayStreamFallbackBox(container, filename) {
-    container.innerHTML = `
-        <div class="custom-player-wrapper h-full">
-            <div class="aspect-16-9-viewport full-viewport-mesh flex flex-col items-center justify-center p-6 text-center bg-[#07070b]">
-                <div class="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-amber-500 mb-3 shadow-md animate-bounce">
-                    <i class="fa-solid fa-circle-exclamation text-lg"></i>
-                </div>
-                <span class="text-[11px] font-black uppercase tracking-wider text-zinc-300 gff">Direct Access Blueprint Stream</span>
-                <p class="text-[10px] text-zinc-500 max-w-[260px] mt-1 mb-4 leading-relaxed">The active extractor sandbox limits live inline playback for this specific raw structure layer.</p>
-                <button onclick="window.open(document.getElementById('singleSaveBtn').href, '_blank')" class="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-yellow-500/30 rounded-lg text-[10px] font-bold tracking-wide uppercase text-yellow-500 transition-all flex items-center gap-2">
-                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Open In Direct Extractor Channel
-                </button>
-            </div>
-        </div>`;
 }
 
 function interceptDownloadZip(e, encodedUrl) {
@@ -637,7 +655,7 @@ function initBabylonMeshScene(canvasId, modelUrl, filename) {
             mesh.position.subtractInPlace(computedCenter);
             mesh.scaling = new BABYLON.Vector3(targetScaleFactor, targetScaleFactor, targetScaleFactor);
         });
-    }, function() {}, function(scene, message) { handlePreviewStreamError(null, encodeURIComponent(filename)); }, ".obj");
+    }, function() {}, function() {}, ".obj");
     babylonEngine.runRenderLoop(() => { if (babylonScene) babylonScene.render(); });
     window.addEventListener("resize", resizeBabylonViewportMatrix, false);
 }
