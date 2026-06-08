@@ -1,6 +1,4 @@
-from flask import Flask, jsonify, request, Response, send_file
-from flask_cors import CORS
-import requests
+import os
 import re
 import uuid
 import mimetypes
@@ -9,19 +7,19 @@ import json
 import zlib
 import io
 import zipfile
-import xml.etree.ElementTree as ET
+import requests
+from flask import Flask, jsonify, request, Response, send_file
+from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
 BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
-ICON_CDN = 'https://dl.cdn.freefiremobile.com/live/ABHotUpdates/IconCDN/other/'
 VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract"
 
+# Local Persistent Session Cache Map fallback
 MEMORY_ASSET_CACHE = {}
-
-# ─── Token helpers ────────────────────────────────────────────────────────────
 
 def encode_token(remote_url, filename, content_type, content_bytes=None):
     data = {
@@ -29,8 +27,10 @@ def encode_token(remote_url, filename, content_type, content_bytes=None):
         "filename": filename,
         "content_type": content_type
     }
+    # Compress and embed content if it is small (under 100KB) to ensure statelessness on Vercel
     if content_bytes and len(content_bytes) < 100000:
         data["content_b64"] = base64.b64encode(content_bytes).decode('utf-8')
+        
     json_bytes = json.dumps(data).encode('utf-8')
     compressed = zlib.compress(json_bytes)
     return base64.urlsafe_b64encode(compressed).decode('utf-8')
@@ -43,10 +43,8 @@ def decode_token(token):
         compressed = base64.urlsafe_b64decode(token.encode('utf-8'))
         json_bytes = zlib.decompress(compressed)
         return json.loads(json_bytes.decode('utf-8'))
-    except Exception:
+    except Exception as e:
         return None
-
-# ─── Version helpers ──────────────────────────────────────────────────────────
 
 def get_previous_version(version_str):
     try:
@@ -77,141 +75,153 @@ def get_file_info_data(version):
         pass
     return None, None
 
-# ─── Hotfix helpers ───────────────────────────────────────────────────────────
-
-# Type codes → human-readable category
-ITEM_TYPE_MAP = {
-    "2": "Outfit",
-    "7": "Bundle",
-    "9": "Accessory",
-}
-# SubType / CollectionType hints
-COLLECTION_TYPE_MAP = {
-    "5":  "Parachute",
-    "9":  "Emote",
-    "16": "Title",
-    "21": "Voice Item",
-    "30": "Finish Move",
-}
-
-def fetch_hotfix_text(version, filename):
-    """Fetch and return raw text of a hotfix file through server (never exposed to client)."""
-    url = f"{BASE_URL}{version}/Itemhotfix/{filename}"
+def get_extracted_files(file_id, new_text, active_version):
+    suffix = None
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) >= 5 and parts[0].strip() == file_id:
+            suffix = parts[4].strip()
+            break
+    if not suffix:
+        return []
+    encoded = encode_suffix(suffix)
+    download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
     try:
-        res = requests.get(url, timeout=10)
+        encoded_url = base64.urlsafe_b64encode(download_url.encode('utf-8')).decode('utf-8')
+        extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+        res = requests.get(extractor_url, timeout=30)
         if res.status_code == 200:
-            return res.text
-    except:
-        pass
-    # Try alternative zip extraction path
-    url2 = f"{BASE_URL}{version}/lochotfix/{filename}"
-    try:
-        res = requests.get(url2, timeout=10)
-        if res.status_code == 200:
-            return res.text
-    except:
-        pass
-    return None
+            data = res.json()
+            return data.get("files", []) or data.get("assets", [])
+    except Exception as e:
+        print(f"Failed to extract bundle {file_id}: {e}")
+    return []
 
-def fetch_lochotfix_text(version):
-    """Fetch lochotfix.txt for name lookups."""
-    url = f"{BASE_URL}{version}/lochotfix/lochotfix.txt"
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            return res.text
-    except:
-        pass
-    return None
+def extract_new_game_items(active_version, new_text):
+    itemhotfix_id = None
+    lochotfix_id = None
+    
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) >= 5:
+            fid = parts[0].strip()
+            if "config/itemhotfix" in fid.lower():
+                itemhotfix_id = fid
+            elif "localization/lochotfix" in fid.lower():
+                lochotfix_id = fid
 
-def parse_loc_map(loc_text):
-    """Parse lochotfix.txt into {text_id: en_name} map."""
-    loc_map = {}
-    if not loc_text:
-        return loc_map
-    for line in loc_text.splitlines():
-        line = line.strip()
-        if not line.startswith('<l '):
-            continue
-        # Extract id
-        id_match = re.search(r'\bid="([^"]+)"', line)
-        en_match = re.search(r'\ben="([^"]*)"', line)
-        if id_match and en_match:
-            loc_map[id_match.group(1)] = en_match.group(1)
-    return loc_map
-
-def categorise_item(type_id, subtype, collection_type, name_id):
-    """Return a user-friendly category string."""
-    cat = ITEM_TYPE_MAP.get(str(type_id), f"Type{type_id}")
-    col = COLLECTION_TYPE_MAP.get(str(collection_type), "")
-    if col:
-        return col
-    if str(type_id) == "9":
-        return "Accessory"
-    return cat
-
-def parse_item_hotfix(item_text, loc_map, version):
-    """
-    Parse ItemHotfix.txt CSV rows and return a list of item dicts.
-    Groups outfit parts under their bundle if a bundle for the same set exists.
-    """
-    if not item_text:
+    if not itemhotfix_id:
         return []
 
-    rows = []
-    for line in item_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(',')
-        if len(parts) < 10:
-            continue
-        item_id = parts[0].strip()
-        # Skip header rows
-        if not item_id or not item_id[0].isdigit():
-            continue
-        type_id = parts[1].strip()
-        subtype = parts[2].strip()
-        collection_type = parts[3].strip()
-        name_id = parts[7].strip()  # col index 7
-        icon_id = parts[9].strip()  # col index 9
-
-        en_name = loc_map.get(name_id, name_id) if name_id else ""
-
-        rows.append({
-            "id": item_id,
-            "type": type_id,
-            "subtype": subtype,
-            "collection_type": collection_type,
-            "name_id": name_id,
-            "icon_id": icon_id,
-            "name": en_name,
-            "category": categorise_item(type_id, subtype, collection_type, name_id),
-            "icon_url": f"/api?action=icon&item_id={item_id}",
-        })
-
-    # Group: if a bundle exists (type==7, name contains "Bundle"), collect outfit parts by name similarity
-    bundles = [r for r in rows if r["type"] == "7" and "bundle" in r["name"].lower()]
-    bundle_name_keys = set()
-    for b in bundles:
-        # Extract a short base key from bundle name (strip "Bundle" and variant words)
-        key = re.sub(r'\s*(bundle|pack|set)\s*', '', b["name"], flags=re.IGNORECASE).strip().lower()
-        bundle_name_keys.add(key)
-
-    # Items that are outfit parts (type 2) whose name matches a bundle base key — suppress them
-    suppressed_ids = set()
-    for r in rows:
-        if r["type"] != "2":
-            continue
-        for bkey in bundle_name_keys:
-            if bkey and bkey in r["name"].lower():
-                suppressed_ids.add(r["id"])
+    itemhotfix_files = get_extracted_files(itemhotfix_id, new_text, active_version)
+    itemhotfix_content = ""
+    for f in itemhotfix_files:
+        fname = f.get("name", "") or f.get("fileName", "")
+        if "itemhotfix.txt" in fname.lower():
+            b64_data = f.get("data", "")
+            if b64_data:
+                itemhotfix_content = base64.b64decode(b64_data).decode('utf-8', errors='ignore')
                 break
 
-    result = [r for r in rows if r["id"] not in suppressed_ids]
-    return result
+    if not itemhotfix_content:
+        return []
 
-# ─── Logic functions ──────────────────────────────────────────────────────────
+    lochotfix_content = ""
+    if lochotfix_id:
+        lochotfix_files = get_extracted_files(lochotfix_id, new_text, active_version)
+        for f in lochotfix_files:
+            fname = f.get("name", "") or f.get("fileName", "")
+            if "lochotfix.txt" in fname.lower():
+                b64_data = f.get("data", "")
+                if b64_data:
+                    lochotfix_content = base64.b64decode(b64_data).decode('utf-8', errors='ignore')
+                    break
+
+    translations = {}
+    if lochotfix_content:
+        matches = re.findall(r'<l\s+[^>]*id="([^"]+)"[^>]*\ben="([^"]+)"', lochotfix_content)
+        for name_id, en_val in matches:
+            translations[name_id] = en_val
+
+    raw_parsed_items = []
+    lines = itemhotfix_content.splitlines()
+    if len(lines) > 2:
+        for line in lines[2:]:
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 8:
+                item_id = parts[0].strip()
+                if not item_id or not item_id.isdigit():
+                    continue
+                
+                text_id = parts[7].strip() if parts[7].strip() else ""
+                if not text_id:
+                    for p in parts:
+                        if p.strip().startswith("T_"):
+                            text_id = p.strip()
+                            break
+                
+                raw_parsed_items.append({
+                    "id": item_id,
+                    "text_id": text_id,
+                    "row_parts": parts
+                })
+
+    for item in raw_parsed_items:
+        text_id = item["text_id"]
+        resolved_name = translations.get(text_id, text_id)
+        if not resolved_name:
+            resolved_name = f"Item {item['id']}"
+        item["name"] = resolved_name
+        item["icon_url"] = f"https://dl.cdn.freefiremobile.com/live/ABHotUpdates/IconCDN/other/{item['id']}.png"
+
+    bundles = []
+    non_bundles = []
+    for item in raw_parsed_items:
+        if "bundle" in item["name"].lower():
+            bundles.append(item)
+        else:
+            non_bundles.append(item)
+
+    grouped_items = []
+    used_non_bundles = set()
+
+    for bundle in bundles:
+        base_name = re.sub(r'\s+bundle\b', '', bundle['name'], flags=re.IGNORECASE).strip()
+        parts = []
+        for nb in non_bundles:
+            if base_name.lower() in nb['name'].lower() or nb['name'].lower().startswith(base_name.lower()):
+                parts.append({
+                    "id": nb["id"],
+                    "name": nb["name"],
+                    "text_id": nb["text_id"],
+                    "icon_url": nb["icon_url"]
+                })
+                used_non_bundles.add(nb['id'])
+        
+        grouped_items.append({
+            "id": bundle["id"],
+            "name": bundle["name"],
+            "text_id": bundle["text_id"],
+            "icon_url": bundle["icon_url"],
+            "parts": parts,
+            "is_bundle": True
+        })
+
+    for nb in non_bundles:
+        if nb['id'] not in used_non_bundles:
+            grouped_items.append({
+                "id": nb["id"],
+                "name": nb["name"],
+                "text_id": nb["text_id"],
+                "icon_url": nb["icon_url"],
+                "parts": [],
+                "is_bundle": False
+            })
+
+    return grouped_items
 
 def latest_version_logic():
     try:
@@ -227,12 +237,7 @@ def latest_version_logic():
         return jsonify({"success": False, "message": str(e)}), 500
     return jsonify({"success": False, "message": "Failed response lookup."}), 500
 
-
 def check_update_logic():
-    """
-    Compare up to 6 previous versions against the requested version.
-    Falls back gracefully if older versions are unavailable.
-    """
     input_val = request.args.get('version', '').strip()
     if not input_val:
         return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
@@ -254,49 +259,50 @@ def check_update_logic():
         if not new_text:
             return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
 
-    # Build a union map of all file IDs that appear in previous 1-6 versions
-    old_files_map = {}
-    current_check = active_version
-    versions_loaded = 0
+    # Calculate and fetch up to 6 previous history versions for differential comparisons
+    prev_versions = []
+    current_temp = active_version
     for _ in range(6):
-        prev_ver = get_previous_version(current_check)
+        prev_ver = get_previous_version(current_temp)
         if not prev_ver:
             break
-        old_text, _ = get_file_info_data(prev_ver)
-        if old_text:
-            for line in old_text.splitlines():
-                if not line.strip():
-                    continue
-                parts = line.split(',')
-                if len(parts) >= 3:
-                    fid = parts[0]
-                    try:
-                        sz = int(parts[2])
-                    except:
-                        sz = 0
-                    # First occurrence wins (closest previous version)
-                    if fid not in old_files_map:
-                        old_files_map[fid] = sz
-            versions_loaded += 1
-        current_check = prev_ver
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+
+    old_texts = []
+    for pv in prev_versions:
+        txt, _ = get_file_info_data(pv)
+        if txt:
+            old_texts.append(txt)
+
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try:
+                    old_size = int(parts[2])
+                except:
+                    old_size = 0
+                old_files_map[file_id] = old_size
 
     file_infos = []
     total_size = 0
 
     for line in new_text.splitlines():
-        if not line.strip():
-            continue
+        if not line.strip(): continue
         parts = line.split(',')
-        if len(parts) < 5:
-            continue
+        if len(parts) < 5: continue
 
-        file_id, size_str, suffix = parts[0], parts[2], parts[4]
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
         if not file_id or not suffix:
             continue
 
-        try:
+        try: 
             size = int(size_str)
-        except:
+        except: 
             size = 0
 
         if file_id in old_files_map:
@@ -311,70 +317,31 @@ def check_update_logic():
         download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
         file_name = file_id.split('/')[-1]
 
+        # Generate custom local proxy secure streaming tokens to obscure Tata CDN and third-party APIs
+        token = encode_token(download_url, file_name, 'application/octet-stream')
+        proxy_url = f"/api?action=stream&token={token}"
+
         total_size += size
         file_infos.append({
-            "fileName": file_name,
+            "fileName": file_id,
             "size": size,
-            "url": download_url,
+            "url": proxy_url,
             "status": status
         })
+
+    new_items = []
+    try:
+        new_items = extract_new_game_items(active_version, new_text)
+    except Exception as e:
+        print(f"Error parsing game items hotfix: {e}")
 
     return jsonify({
         "success": True,
         "version": active_version,
         "totalSize": total_size,
-        "versionsCompared": versions_loaded,
-        "files": file_infos
+        "files": file_infos,
+        "new_items": new_items
     })
-
-
-def hotfix_items_logic():
-    """
-    Fetch ItemHotfix.txt + lochotfix.txt for a given version (server-side only),
-    parse and return detected new game items. The CDN URLs are NEVER sent to client.
-    """
-    version = request.args.get('version', '').strip()
-    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Invalid version"}), 400
-
-    item_text = fetch_hotfix_text(version, 'ItemHotfix.txt')
-    # Also try lowercase
-    if not item_text:
-        item_text = fetch_hotfix_text(version, 'itemhotfix.txt')
-
-    loc_text = fetch_lochotfix_text(version)
-
-    loc_map = parse_loc_map(loc_text)
-    items = parse_item_hotfix(item_text, loc_map, version)
-
-    return jsonify({
-        "success": True,
-        "version": version,
-        "item_count": len(items),
-        "items": items
-    })
-
-
-def icon_proxy_logic():
-    """
-    Proxy item icons from the CDN so the real icon CDN URL never appears in the client network tab.
-    """
-    item_id = request.args.get('item_id', '').strip()
-    if not item_id or not re.match(r'^\d+$', item_id):
-        return "Invalid item_id", 400
-
-    icon_url = f"{ICON_CDN}{item_id}.png"
-    try:
-        res = requests.get(icon_url, timeout=8)
-        if res.status_code == 200:
-            response = Response(res.content, mimetype='image/png')
-            response.headers["Cache-Control"] = "public, max-age=86400"
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
-    except:
-        pass
-    return "Icon not found", 404
-
 
 def process_file_logic():
     if 'file' not in request.files:
@@ -395,7 +362,7 @@ def process_file_logic():
 
     try:
         response = requests.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
-
+        
         if not response.ok:
             try:
                 err_data = response.json()
@@ -406,16 +373,18 @@ def process_file_logic():
         extractor_data = response.json()
         assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
 
+        # Process each extracted component to build safe base64-encoded stream routes
         for asset in assets_list:
             remote_preview_url = asset.get("preview_url") or asset.get("url")
             if not remote_preview_url:
                 continue
 
+            # Convert relative path schema from extractor to absolute address format
             if remote_preview_url.startswith('/'):
                 remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
 
             filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
-
+            
             detected_content_type = 'application/octet-stream'
             if filename_str.endswith('.json'):
                 detected_content_type = 'application/json'
@@ -428,11 +397,14 @@ def process_file_logic():
             elif filename_str.endswith('.mp4'):
                 detected_content_type = 'video/mp4'
 
+            # Decode the base64 content received from extractor
             b64_content = asset.get("data", "")
             file_bytes = base64.b64decode(b64_content) if b64_content else b""
 
+            # Encode URL token (embedded with compressed file data for statelessness)
             local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
 
+            # Keep in memory cache as fallback
             global MEMORY_ASSET_CACHE
             MEMORY_ASSET_CACHE[local_cache_token] = {
                 "content": file_bytes,
@@ -440,17 +412,15 @@ def process_file_logic():
                 "content_type": detected_content_type
             }
 
+            # Map streams to /api endpoint using safe parameter flags
             local_proxy_route = f"/api?action=stream&token={local_cache_token}"
-            if "preview_url" in asset:
-                asset["preview_url"] = local_proxy_route
-            if "url" in asset:
-                asset["url"] = local_proxy_route
+            if "preview_url" in asset: asset["preview_url"] = local_proxy_route
+            if "url" in asset: asset["url"] = local_proxy_route
 
         return jsonify(extractor_data), 200
 
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
-
 
 def stream_cache_logic(token):
     if not token:
@@ -460,7 +430,8 @@ def stream_cache_logic(token):
     if decoded:
         filename = decoded.get("filename", "file")
         mime_type = decoded.get("content_type", "application/octet-stream")
-
+        
+        # Check if content is embedded directly in the token
         if "content_b64" in decoded:
             try:
                 content = base64.b64decode(decoded["content_b64"])
@@ -472,6 +443,7 @@ def stream_cache_logic(token):
             except:
                 pass
 
+        # Otherwise download it from the remote URL
         remote_url = decoded.get("url")
         if remote_url:
             try:
@@ -482,9 +454,10 @@ def stream_cache_logic(token):
                     response.headers["Accept-Ranges"] = "bytes"
                     response.headers["Access-Control-Allow-Origin"] = "*"
                     return response
-            except Exception:
+            except Exception as e:
                 pass
 
+    # Fallback to local memory cache
     global MEMORY_ASSET_CACHE
     cached_item = MEMORY_ASSET_CACHE.get(token)
 
@@ -498,6 +471,36 @@ def stream_cache_logic(token):
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
+def extract_zip_logic(token):
+    if not token:
+        return "Missing token query parameter", 400
+    
+    decoded = decode_token(token)
+    if not decoded:
+        return "Invalid or expired stream token payload", 400
+    
+    remote_url = decoded.get("url")
+    if not remote_url:
+        return "Target bundle address missing in decrypted token payload", 400
+        
+    encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
+    extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}&download_type=zip"
+    
+    try:
+        res = requests.get(extractor_url, timeout=60, stream=True)
+        if res.status_code == 200:
+            filename = decoded.get("filename", "extracted_asset") + ".zip"
+            def generate():
+                for chunk in res.iter_content(chunk_size=8192):
+                    yield chunk
+            response = Response(generate(), mimetype='application/zip')
+            response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        else:
+            return f"Extractor pipeline failure status code: {res.status_code}", 500
+    except Exception as e:
+        return f"Failed connecting proxy mapping to zip extractor endpoint: {e}", 500
 
 def bulk_zip_logic(version):
     if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
@@ -510,53 +513,61 @@ def bulk_zip_logic(version):
         if not new_text:
             return "Target version logs missing from server", 404
 
-    prev_version = get_previous_version(active_version)
-    old_text, _ = get_file_info_data(prev_version)
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver:
+            break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+
+    old_texts = []
+    for pv in prev_versions:
+        txt, _ = get_file_info_data(pv)
+        if txt:
+            old_texts.append(txt)
 
     old_files_map = {}
-    if old_text:
+    for old_text in reversed(old_texts):
         for line in old_text.splitlines():
-            if not line.strip():
-                continue
+            if not line.strip(): continue
             parts = line.split(',')
             if len(parts) >= 3:
-                file_id = parts[0]
-                try:
-                    old_size = int(parts[2])
-                except:
-                    old_size = 0
+                file_id = parts[0].strip()
+                try: old_size = int(parts[2])
+                except: old_size = 0
                 old_files_map[file_id] = old_size
 
     zip_io = io.BytesIO()
     files_added_to_zip = 0
-
+    
     with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
         for line in new_text.splitlines():
-            if not line.strip():
-                continue
+            if not line.strip(): continue
             parts = line.split(',')
-            if len(parts) < 5:
-                continue
+            if len(parts) < 5: continue
 
-            file_id, size_str, suffix = parts[0], parts[2], parts[4]
-            if not file_id or not suffix:
-                continue
+            file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+            if not file_id or not suffix: continue
 
-            try:
-                size = int(size_str)
-            except:
-                size = 0
+            try: size = int(size_str)
+            except: size = 0
 
+            # Filter modified/new files
             if file_id in old_files_map:
                 if old_files_map[file_id] != size:
                     pass
                 else:
                     continue
+            else:
+                pass
 
             encoded = encode_suffix(suffix)
             download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
-
+            
             try:
+                # Call extractor statelessly using the remote URL
                 encoded_url = base64.urlsafe_b64encode(download_url.encode('utf-8')).decode('utf-8')
                 extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
                 res = requests.get(extractor_url, timeout=45)
@@ -573,23 +584,20 @@ def bulk_zip_logic(version):
                             files_added_to_zip += 1
             except Exception as e:
                 print(f"Failed to extract bundle {file_id}: {e}")
-
+                
     if files_added_to_zip == 0:
         return "No assets could be extracted for this version update", 400
-
+        
     zip_io.seek(0)
     response = Response(zip_io.getvalue(), mimetype='application/zip')
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
 
-
-# ─── Route dispatcher ─────────────────────────────────────────────────────────
-
 @app.route('/', methods=['GET', 'POST'])
 @app.route('/api', methods=['GET', 'POST'])
 def handle_all_requests():
     action = request.args.get('action')
-
+    
     if not action:
         path = request.path.rstrip('/')
         if path == '/api/process' or path == '/process':
@@ -604,9 +612,12 @@ def handle_all_requests():
         elif path.startswith('/api/stream-cache/') or path.startswith('/stream-cache/'):
             token = path.split('/')[-1]
             return stream_cache_logic(token)
-
+        elif path == '/api/extract-zip' or path == '/extract-zip':
+            token = request.args.get('token')
+            return extract_zip_logic(token)
+        
+        # Serves the static landing page
         if request.method == 'GET' and (path == '' or path == '/api'):
-            import os
             try:
                 for filename in ['public/index.html', 'index.html']:
                     if os.path.exists(filename):
@@ -626,13 +637,10 @@ def handle_all_requests():
         return stream_cache_logic(request.args.get('token'))
     elif action == 'bulk-zip':
         return bulk_zip_logic(request.args.get('version'))
-    elif action == 'hotfix-items':
-        return hotfix_items_logic()
-    elif action == 'icon':
-        return icon_proxy_logic()
+    elif action == 'extract-zip':
+        return extract_zip_logic(request.args.get('token'))
 
     return jsonify({"success": False, "message": f"Action parameter '{action}' is unmapped."}), 404
-
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
