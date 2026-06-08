@@ -154,13 +154,12 @@ def process_file():
     if uploaded_file.filename == '':
         return jsonify({"success": False, "message": "Empty filename header sent"}), 400
     
-    # Pack parameters explicitly to match the external 'asset_bundle' configuration requirement
     files = {
         'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
     }
     
     try:
-        response = requests.post(EXTRACTOR_API_URL, files=files, timeout=30)
+        response = requests.post(EXTRACTOR_API_URL, files=files, timeout=45)
         return jsonify(response.json()), response.status_code
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
