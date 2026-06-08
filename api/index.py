@@ -66,25 +66,33 @@ def check_update():
         version = input_val
 
     if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Illegal version context parameters configuration"}), 400
+        return jsonify({"success": False, "message": "Illegal version format entered"}), 400
 
     new_text, active_version = get_file_info_data(version)
-    
-    # Intelligently step back down an index number if target index is completely unallocated on server storage space yet.
+
+    # Automatically drop back an index step if targeted version hasn't generated on servers yet
     if not new_text:
         fallback_ver = get_previous_version(version)
         new_text, active_version = get_file_info_data(fallback_ver)
         if not new_text:
-            return jsonify({"success": False, "message": "Target branch index map data records completely absent on cloud servers"}), 404
+            return jsonify({"success": False, "message": "Target version logs missing from cloud storage servers"}), 404
 
     prev_version = get_previous_version(active_version)
     old_text, _ = get_file_info_data(prev_version)
 
-    old_ids = set()
+    # Build map layout profile mapping of previous sizes to compare file modifications accurately
+    old_files_map = {}
     if old_text:
         for line in old_text.splitlines():
+            if not line.strip(): continue
             parts = line.split(',')
-            if parts: old_ids.add(parts[0])
+            if len(parts) >= 3:
+                file_id = parts[0]
+                try:
+                    old_size = int(parts[2])
+                except:
+                    old_size = 0
+                old_files_map[file_id] = old_size
 
     file_infos = []
     total_size = 0
@@ -93,13 +101,24 @@ def check_update():
         if not line.strip(): continue
         parts = line.split(',')
         if len(parts) < 5: continue
-        
+
         file_id, size_str, suffix = parts[0], parts[2], parts[4]
-        if file_id in old_ids or not file_id or not suffix:
+        if not file_id or not suffix:
             continue
 
-        try: size = int(size_str)
-        except: size = 0
+        try: 
+            size = int(size_str)
+        except: 
+            size = 0
+
+        # Perfect Modification/New Identifier Logic Rule
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size:
+                status = "Modified" # Same name, different payload layout sizing
+            else:
+                continue # Completely untouched identical file, bypass it
+        else:
+            status = "New" # Brand new file signature deployment found
 
         encoded = encode_suffix(suffix)
         download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
@@ -109,7 +128,8 @@ def check_update():
         file_infos.append({
             "fileName": file_name,
             "size": size,
-            "url": download_url
+            "url": download_url,
+            "status": status
         })
 
     return jsonify({
