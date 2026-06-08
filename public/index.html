@@ -93,39 +93,32 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #1c1c24; border-radius: 10px; }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--ff-yellow); }
 
-/* ── New Items Panel ── */
-#newItemsSection { max-width: 1400px; margin: 0 auto; padding: 0 20px 60px 20px; display: none; }
-.items-panel { background: #09090d; border: 1px solid #181822; border-radius: 20px; box-shadow: 0 25px 60px rgba(0,0,0,0.8); position: relative; overflow: hidden; }
-.items-panel::before { content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--ff-emerald); z-index: 10; }
-.items-panel-header { padding: 18px 22px 14px 26px; border-bottom: 1px solid #13131a; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 18px; }
-@media (max-width: 600px) { .items-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; } }
-
-.item-card { background: #040406; border: 1px solid #16161f; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; align-items: center; padding: 12px 10px 10px; gap: 8px; transition: border-color 0.2s, transform 0.2s; position: relative; }
-.item-card:hover { border-color: #2a2a3a; transform: translateY(-2px); }
-.item-card-icon { width: 72px; height: 72px; border-radius: 10px; background: #0a0a10; border: 1px solid #1a1a25; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; }
-.item-card-icon img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
-.item-card-icon .icon-placeholder { color: #2a2a40; font-size: 22px; }
-.item-card-icon .icon-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0a0a10; }
-.item-card-name { font-size: 10px; font-weight: 700; color: #c8c8d8; text-align: center; width: 100%; line-height: 1.35; word-break: break-word; hyphens: auto; }
-.item-card-id { font-size: 9px; color: #44445a; font-family: 'Courier New', monospace; text-align: center; }
-.item-card-category { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 4px; }
-.cat-bundle { background: rgba(255,222,0,0.1); color: var(--ff-yellow); border: 1px solid rgba(255,222,0,0.2); }
-.cat-emote { background: rgba(0,255,163,0.08); color: var(--ff-emerald); border: 1px solid rgba(0,255,163,0.15); }
-.cat-outfit { background: rgba(56,189,248,0.08); color: var(--ff-cyan); border: 1px solid rgba(56,189,248,0.15); }
-.cat-accessory { background: rgba(167,139,250,0.08); color: #a78bfa; border: 1px solid rgba(167,139,250,0.15); }
-.cat-other { background: rgba(160,160,180,0.08); color: #888; border: 1px solid rgba(160,160,180,0.15); }
-.item-card-actions { display: flex; gap: 6px; margin-top: 2px; }
-.item-action-btn { width: 26px; height: 26px; border-radius: 7px; background: #0e0e16; border: 1px solid #1c1c28; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #555568; transition: all 0.2s; font-size: 10px; }
-.item-action-btn:hover { background: #1a1a26; color: var(--ff-yellow); border-color: rgba(255,222,0,0.3); }
-.item-action-btn.copy-id:hover { color: var(--ff-cyan); border-color: rgba(56,189,248,0.3); background: rgba(56,189,248,0.05); }
-.item-action-btn.dl-icon:hover { color: var(--ff-emerald); border-color: rgba(0,255,163,0.3); background: rgba(0,255,163,0.05); }
-
-/* Toast */
-.ff-toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(10px); background: #111118; border: 1px solid #2a2a3a; color: #ddd; padding: 10px 20px; border-radius: 10px; font-size: 12px; z-index: 9999; opacity: 0; transition: all 0.3s; pointer-events: none; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
-.ff-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-.ff-toast.success { border-color: rgba(0,255,163,0.3); color: var(--ff-emerald); }
-.ff-toast.error { border-color: rgba(255,62,62,0.3); color: var(--ff-red); }
+.toast {
+    position: fixed;
+    bottom: 25px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #09090d;
+    border: 1px solid #181822;
+    color: white;
+    padding: 12px 25px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    z-index: 1000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.toast.show {
+    opacity: 1;
+    transform: translate(-50%, -10px);
+    pointer-events: auto;
+}
 </style>
 </head>
 <body>
@@ -164,7 +157,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 
                 <div id="wrapperManual" class="hidden w-full text-center">
                     <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">Enter miniupdate Version</span>
-                    <input type="text" id="inputVersion" class="input-text-nexus">
+                    <input type="text" id="inputVersion" class="input-text-nexus" placeholder="e.g. 1.111.15">
                 </div>
 
                 <button id="extractBtn" class="btn-mechanical w-full h-12 text-sm font-bold italic flex-shrink-0">
@@ -185,10 +178,10 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 
     <div id="listWindowPanel" class="uniform-panel panel-2">
         <div class="panel-body">
-            <div class="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3 flex-shrink-0 min-w-0">
+            <div class="flex items-center justify-between mb-3 border-b border-zinc-900 pb-2 flex-shrink-0 min-w-0">
                 <div class="min-w-0 text-left mr-2">
                     <h2 class="text-xs font-black text-white uppercase tracking-wider">Discovered Packages</h2>
-                    <p id="cacheCounterText" class="text-[10px] text-zinc-500 truncate">0 files found</p>
+                    <p id="cacheCounterText" class="text-[10px] text-zinc-500 truncate">0 elements found</p>
                 </div>
                 <div class="flex items-center gap-2 hidden" id="listActions">
                     <button onclick="downloadMasterBulkZip()" title="Download All Files as a ZIP" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-yellow-500 hover:text-white hover:bg-yellow-500 hover:border-yellow-500 transition-all shadow-md flex-shrink-0">
@@ -196,6 +189,12 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                     </button>
                 </div>
             </div>
+
+            <div class="tab-row mb-3" id="packageTabs">
+                <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)</div>
+                <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)</div>
+            </div>
+
             <div class="scrollable-content-box flex-1 flex flex-col">
                 <div id="listEmptyState" class="flex-1 flex flex-col items-center justify-center text-zinc-700 p-8 text-center">
                     <i class="fa-solid fa-folder-tree text-2xl mb-3 text-zinc-800"></i>
@@ -207,6 +206,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                     <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Analyzing update patch packages...</span>
                 </div>
                 <div id="fileList" class="hidden flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-w-0"></div>
+                <div id="itemList" class="hidden flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar min-w-0"></div>
             </div>
         </div>
     </div>
@@ -239,48 +239,15 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
     </div>
 </div>
 
-<!-- ── New Items Section ── -->
-<div id="newItemsSection">
-    <div class="items-panel">
-        <div class="items-panel-header">
-            <div>
-                <h2 class="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
-                    <i class="fa-solid fa-wand-magic-sparkles text-[var(--ff-emerald)]"></i>
-                    New Game Items Detected
-                </h2>
-                <p id="itemsSubtitle" class="text-[10px] text-zinc-500 mt-0.5">Parsed from ItemHotfix — bundles counted as one unit</p>
-            </div>
-            <div class="flex items-center gap-3">
-                <div id="itemsCountBadge" class="text-[10px] font-black px-3 py-1 rounded-lg bg-[var(--ff-emerald)]/10 text-[var(--ff-emerald)] border border-[var(--ff-emerald)]/20">0 items</div>
-                <button id="itemsCopyAllBtn" class="text-[10px] font-bold px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-600 transition-all flex items-center gap-2">
-                    <i class="fa-solid fa-copy text-[9px]"></i> Copy All IDs
-                </button>
-            </div>
-        </div>
-
-        <div id="itemsLoadingState" class="hidden flex flex-col items-center justify-center py-10 gap-3">
-            <i class="fa-solid fa-circle-notch fa-spin text-[var(--ff-emerald)] text-xl"></i>
-            <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Parsing hotfix item data...</span>
-        </div>
-        <div id="itemsEmptyState" class="hidden flex flex-col items-center justify-center py-10 gap-2 text-zinc-700">
-            <i class="fa-solid fa-box-open text-2xl text-zinc-800"></i>
-            <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600">No new items detected in this update</span>
-        </div>
-        <div id="itemsErrorState" class="hidden flex flex-col items-center justify-center py-10 gap-2">
-            <i class="fa-solid fa-triangle-exclamation text-xl text-[var(--ff-red)]"></i>
-            <span id="itemsErrorMsg" class="text-[10px] text-zinc-500">Could not load item data for this version.</span>
-        </div>
-        <div id="itemsGrid" class="items-grid"></div>
-    </div>
-</div>
-
-<div class="ff-toast" id="ffToast"></div>
+<div class="toast" id="toast"></div>
 
 <script>
 let activeCache = [];
+let activeNewItems = [];
 let activeMode = "auto";
+let activePackageTab = "files";
 let preCalculatedAutoVersion = "";
-let activeBuildIsNewPatch = false;
+let activeBuildIsNewPatch = false; 
 
 let offlineDataPayloadSessionCache = {};
 
@@ -288,6 +255,7 @@ let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
 
 const pipelineTabs = document.getElementById("pipelineTabs");
+const packageTabs = document.getElementById("packageTabs");
 const wrapperAuto = document.getElementById("wrapperAuto");
 const wrapperManual = document.getElementById("wrapperManual");
 const txtAutoLabel = document.getElementById("txtAutoLabel");
@@ -298,6 +266,7 @@ const extractBtn = document.getElementById("extractBtn");
 const btnIcon = document.getElementById("btnIcon");
 const btnText = document.getElementById("btnText");
 const fileList = document.getElementById("fileList");
+const itemList = document.getElementById("itemList");
 const listWindowPanel = document.getElementById("listWindowPanel");
 
 pipelineTabs.addEventListener("click", (e) => {
@@ -316,6 +285,22 @@ pipelineTabs.addEventListener("click", (e) => {
     }
 });
 
+packageTabs.addEventListener("click", (e) => {
+    const target = e.target.closest(".tab-btn");
+    if (!target) return;
+    document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => btn.classList.remove("active"));
+    target.classList.add("active");
+    activePackageTab = target.dataset.tab;
+
+    if(activePackageTab === "files") {
+        fileList.classList.remove("hidden");
+        itemList.classList.add("hidden");
+    } else {
+        fileList.classList.add("hidden");
+        itemList.classList.remove("hidden");
+    }
+});
+
 async function initSystemMatrix() {
     try {
         txtAutoLabel.textContent = "Checking live channels...";
@@ -327,7 +312,7 @@ async function initSystemMatrix() {
         if (data.success && data.target_version) {
             preCalculatedAutoVersion = data.target_version;
             txtAutoTarget.textContent = preCalculatedAutoVersion;
-            activeBuildIsNewPatch = true;
+            activeBuildIsNewPatch = true; 
             txtAutoLabel.textContent = "New Miniupdate Version found";
             radarIndicatorDot.className = "indicator-dot";
         } else {
@@ -350,11 +335,23 @@ function computeByteScale(bytes) {
     return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + ['Bytes', 'KB', 'MB', 'GB'][i];
 }
 
-function encodeBase64Url(str) {
-    return btoa(unescape(encodeURIComponent(str)))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+function showToast(message, isSuccess = true) {
+    const toast = document.getElementById("toast");
+    if (!toast) return;
+    toast.innerHTML = `<i class="fa-solid ${isSuccess ? 'fa-circle-check text-emerald-400' : 'fa-circle-exclamation text-red-500'}"></i> ${message}`;
+    toast.classList.add("show");
+    setTimeout(() => {
+        toast.classList.remove("show");
+    }, 2500);
+}
+
+function copyItemInfo(id, name) {
+    const textToCopy = `Item ID: ${id}\nName: ${name}`;
+    navigator.clipboard.writeText(textToCopy).then(() => {
+        showToast("Item details copied!");
+    }).catch(() => {
+        showToast("Failed to copy", false);
+    });
 }
 
 extractBtn.onclick = async () => {
@@ -371,15 +368,13 @@ extractBtn.onclick = async () => {
     document.getElementById('statusBadge').innerText = "SCANNING";
     document.getElementById('statusBadge').style.color = "var(--ff-yellow)";
     document.getElementById('statusText').innerText = "COMPARING";
-    document.getElementById('statusDescText').innerText = `Comparing live patch data across up to 6 previous versions...`;
+    document.getElementById('statusDescText').innerText = `Comparing live patch data sizes...`;
 
     document.getElementById('listEmptyState').classList.add('hidden');
     document.getElementById('listLoadingState').classList.remove('hidden');
     fileList.classList.add('hidden');
+    itemList.classList.add('hidden');
     document.getElementById('listActions').classList.add('hidden');
-
-    // Hide items section while loading
-    document.getElementById('newItemsSection').style.display = 'none';
 
     try {
         const res = await fetch(`/api?action=update&version=${encodeURIComponent(targetVersion)}`);
@@ -387,23 +382,26 @@ extractBtn.onclick = async () => {
         if(!data.success) throw new Error(data.message || "Failed parsing target channels.");
 
         activeCache = data.files || [];
+        activeNewItems = data.new_items || [];
 
         document.getElementById('listLoadingState').classList.add('hidden');
-        renderList();
+        
+        renderList(); 
+        renderItemList();
 
         document.getElementById('listActions').classList.remove('hidden');
-        fileList.classList.remove('hidden');
+        
+        if (activePackageTab === "files") {
+            fileList.classList.remove('hidden');
+        } else {
+            itemList.classList.remove('hidden');
+        }
 
-        const compared = data.versionsCompared || 1;
         document.getElementById('statusBadge').innerText = "SUCCESS";
         document.getElementById('statusBadge').style.color = "var(--ff-emerald)";
-        document.getElementById('statusDescText').innerText = `Compared against ${compared} previous version${compared !== 1 ? 's' : ''}.`;
+        document.getElementById('statusDescText').innerText = `Analysis complete! Detected updates map ready.`;
 
         document.getElementById('listWindowPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-        // Load new items from hotfix
-        loadHotfixItems(data.version || targetVersion);
-
     } catch (err) {
         document.getElementById('statusBadge').innerText = "FAILED";
         document.getElementById('statusBadge').style.color = "var(--ff-red)";
@@ -419,7 +417,8 @@ extractBtn.onclick = async () => {
 
 function renderList() {
     fileList.innerHTML = "";
-    document.getElementById('cacheCounterText').innerText = `${activeCache.length} patch elements identified`;
+    document.getElementById('filesCountTab').innerText = activeCache.length;
+    document.getElementById('cacheCounterText').innerText = `${activeCache.length + activeNewItems.length} elements identified`;
 
     if(activeCache.length === 0) {
         document.getElementById('listEmptyState').classList.remove('hidden');
@@ -443,7 +442,7 @@ function renderList() {
                         ${index + 1}
                     </div>
                     <div class="min-w-0 flex-1">
-                        <p class="text-[11px] font-bold text-zinc-300 truncate group-hover:text-white">${item.fileName}</p>
+                        <p class="text-[11px] font-bold text-zinc-300 truncate group-hover:text-white" title="${item.fileName}">${item.fileName}</p>
                         <div class="flex items-center gap-2 mt-0.5">
                             <span class="text-[8px] font-medium text-zinc-500 tracking-wider">${computeByteScale(item.size)}</span>
                             <span class="text-[8px] font-black px-1.5 py-0.2 rounded border uppercase ${badgeColor}">${item.status}</span>
@@ -466,6 +465,80 @@ function renderList() {
     });
 }
 
+function renderItemList() {
+    itemList.innerHTML = "";
+    document.getElementById('itemsCountTab').innerText = activeNewItems.length;
+
+    if (activeNewItems.length === 0) {
+        itemList.innerHTML = `
+            <div class="flex-1 flex flex-col items-center justify-center text-zinc-700 p-8 text-center h-full my-auto">
+                <i class="fa-solid fa-wand-magic-sparkles text-2xl mb-3 text-zinc-800"></i>
+                <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600 block">No New Items</span>
+                <p class="text-[10px] text-zinc-500 max-w-[180px] mt-1 leading-normal">No new game items detected in this update patch bundle.</p>
+            </div>`;
+        return;
+    }
+
+    activeNewItems.forEach(item => {
+        const row = document.createElement('div');
+        row.className = "bg-[#0b0b0f] border border-zinc-900 rounded-xl p-3 flex flex-col space-y-2 min-w-0";
+
+        let partsHtml = "";
+        if (item.parts && item.parts.length > 0) {
+            const partRows = item.parts.map(part => `
+                <div class="flex items-center justify-between p-1.5 hover:bg-[#111116] rounded-lg border border-zinc-950 min-w-0">
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                        <img src="${part.icon_url}" class="w-7 h-7 object-contain rounded bg-black border border-zinc-900 flex-shrink-0" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
+                        <div class="min-w-0 flex-1 text-left">
+                            <p class="text-[10px] font-bold text-zinc-300 truncate">${part.name}</p>
+                            <p class="text-[8px] text-zinc-500 font-mono">ID: ${part.id}</p>
+                        </div>
+                    </div>
+                    <div class="flex gap-1 ml-2 flex-shrink-0">
+                        <button onclick="copyItemInfo('${part.id}', '${part.name.replace(/'/g, "\\'")}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Details">
+                            <i class="fa-regular fa-copy text-[9px]"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+
+            partsHtml = `
+                <div class="bg-black/40 border border-zinc-950 rounded-lg p-2 mt-1 space-y-1">
+                    <p class="text-[8px] font-black text-zinc-500 uppercase tracking-wider mb-1 text-left">Bundle Components</p>
+                    <div class="space-y-1">${partRows}</div>
+                </div>
+            `;
+        }
+
+        const cleanNameEscaped = item.name.replace(/'/g, "\\'");
+
+        row.innerHTML = `
+            <div class="flex items-center justify-between min-w-0 gap-2">
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                    <div class="w-12 h-12 bg-black border border-zinc-800 rounded-lg overflow-hidden flex items-center justify-center flex-shrink-0">
+                        <img src="${item.icon_url}" class="w-full h-full object-contain" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
+                    </div>
+                    <div class="min-w-0 flex-1 text-left">
+                        <p class="text-xs font-bold text-white leading-tight">${item.name}</p>
+                        <p class="text-[9px] text-zinc-500 font-mono mt-0.5">ID: ${item.id}</p>
+                        ${item.text_id ? `<p class="text-[8px] text-zinc-600 font-mono truncate">Key: ${item.text_id}</p>` : ''}
+                    </div>
+                </div>
+                <div class="flex gap-1.5 flex-shrink-0">
+                    <button onclick="copyItemInfo('${item.id}', '${cleanNameEscaped}')" class="w-7 h-7 bg-zinc-900 border border-zinc-800 hover:text-white hover:bg-zinc-800 rounded-lg flex items-center justify-center text-zinc-400" title="Copy Details">
+                        <i class="fa-regular fa-copy text-[10px]"></i>
+                    </button>
+                    <a href="${item.icon_url}" target="_blank" download="${item.id}.png" class="w-7 h-7 bg-zinc-900 border border-zinc-800 hover:text-white hover:bg-zinc-800 rounded-lg flex items-center justify-center text-zinc-400" title="Download Icon">
+                        <i class="fa-solid fa-download text-[10px]"></i>
+                    </a>
+                </div>
+            </div>
+            ${partsHtml}
+        `;
+        itemList.appendChild(row);
+    });
+}
+
 async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     const tray = document.getElementById(`tray-${index}`);
     const arrow = document.getElementById(`arrow-${index}`);
@@ -485,7 +558,9 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             otherTray.style.display = "none";
             const otherIdx = otherTray.id.replace('tray-', '');
             const otherArrow = document.getElementById(`arrow-${otherIdx}`);
-            if (otherArrow) otherArrow.style.transform = "rotate(0deg)";
+            if (otherArrow) {
+                otherArrow.style.transform = "rotate(0deg)";
+            }
         }
     });
 
@@ -501,7 +576,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
-        formData.append('bundle_url', url);
+        formData.append('bundle_url', url); 
 
         const response = await fetch('/api?action=process', {
             method: 'POST',
@@ -552,7 +627,7 @@ function getIcon(label, filename = "") {
     const l = label.toLowerCase();
     const ext = filename.split('.').pop().toLowerCase();
 
-    if(l.includes('texture') || ext === 'png' && !l.includes('sprite')) return 'fa-image text-yellow-500';
+    if(l.includes('texture') || (ext === 'png' && !l.includes('sprite'))) return 'fa-image text-yellow-500';
     if(l.includes('spriteatlas') || ext === 'atlas' || filename.includes('.atlas.txt')) return 'fa-boxes-stacked text-amber-400';
     if(l.includes('sprite') || ext === 'png') return 'fa-file-image text-orange-400';
     if(l.includes('audio') || ['ogg','wav','mp3'].includes(ext)) return 'fa-volume-high text-cyan-400';
@@ -645,14 +720,16 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name);
-    } else if (isImage) {
+    } 
+    else if (isImage) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
                     <img src="${liveSourceData}" class="pixelated-render">
                 </div>
             </div>`;
-    } else if (isVideo) {
+    } 
+    else if (isVideo) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -672,7 +749,8 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initCustomVideoController();
-    } else if (isAudio) {
+    } 
+    else if (isAudio) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -693,7 +771,8 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initCustomAudioController();
-    } else if (isBinary) {
+    } 
+    else if (isBinary) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
@@ -711,11 +790,13 @@ async function selectFile(item, element) {
             if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
             const arrayBuffer = await rawResponse.arrayBuffer();
             document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
-            document.getElementById('hexDumpContainer').textContent = getHexDump(arrayBuffer);
+            const hexDump = getHexDump(arrayBuffer);
+            document.getElementById('hexDumpContainer').textContent = hexDump;
         } catch (e) {
             showFallbackError(e.message);
         }
-    } else {
+    } 
+    else {
         try {
             let processedTextString = "";
             if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
@@ -724,13 +805,16 @@ async function selectFile(item, element) {
             } else {
                 const rawTextResponse = await fetch(liveSourceData);
                 if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
+
                 const contentText = await rawTextResponse.text();
                 const sanitizedCheck = contentText.trim().toLowerCase();
+
                 if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head')) {
                     throw new Error("Loop detection active: Server returned local HTML routing document instead of asset file raw bytes.");
                 }
                 processedTextString = contentText;
             }
+
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -746,8 +830,14 @@ async function selectFile(item, element) {
 function interceptDownloadZip(e, encodedUrl) {
     e.stopPropagation();
     const url = decodeURIComponent(encodedUrl);
-    const encodedBundleUrl = encodeBase64Url(url);
-    window.open(`https://ff-asset-extractor.vercel.app/api/extract?bundle_url=${encodedBundleUrl}&download_type=zip`, '_blank');
+    const tokenMatch = url.match(/[?&]token=([^&]+)/);
+    const token = tokenMatch ? tokenMatch[1] : null;
+    
+    if (token) {
+        window.open(`/api?action=extract-zip&token=${token}`, '_blank');
+    } else {
+        showToast("Unable to download Zip: Invalid token mapping", false);
+    }
 }
 
 function downloadMasterBulkZip() {
@@ -785,8 +875,8 @@ function initBabylonMeshScene(canvasId, modelUrl, filename) {
     BABYLON.SceneLoader.ImportMesh("", "", modelUrl, babylonScene, function (meshes) {
         if (!meshes || meshes.length === 0) return;
         const premiumMaterial = new BABYLON.StandardMaterial("eliteModelMat", babylonScene);
-        premiumMaterial.diffuseColor = new BABYLON.Color3(0.85, 0.15, 0.2);
-        premiumMaterial.specularColor = new BABYLON.Color3(1.0, 0.85, 0.0);
+        premiumMaterial.diffuseColor = new BABYLON.Color3(0.85, 0.15, 0.2); 
+        premiumMaterial.specularColor = new BABYLON.Color3(1.0, 0.85, 0.0); 
         premiumMaterial.specularPower = 32;
         premiumMaterial.backFaceCulling = false;
         meshes.forEach(mesh => { if(!mesh.material) mesh.material = premiumMaterial; });
@@ -882,126 +972,6 @@ function formatTimeMetrics(secs) {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = Math.floor(secs % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
-}
-
-// ─── Toast ────────────────────────────────────────────────────────────────────
-function showToast(msg, type = 'success') {
-    const t = document.getElementById('ffToast');
-    t.className = `ff-toast ${type}`;
-    t.innerHTML = `<i class="fa-solid ${type === 'success' ? 'fa-check-circle' : 'fa-circle-exclamation'}"></i> ${msg}`;
-    t.classList.add('show');
-    clearTimeout(t._tid);
-    t._tid = setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-// ─── New Items / Hotfix ───────────────────────────────────────────────────────
-function getCategoryClass(cat) {
-    if (!cat) return 'cat-other';
-    const c = cat.toLowerCase();
-    if (c.includes('bundle')) return 'cat-bundle';
-    if (c.includes('emote')) return 'cat-emote';
-    if (c.includes('outfit') || c.includes('top') || c.includes('bottom') || c.includes('shoe')) return 'cat-outfit';
-    if (c.includes('accessory') || c.includes('voice') || c.includes('finish') || c.includes('parachute') || c.includes('title')) return 'cat-accessory';
-    return 'cat-other';
-}
-
-function downloadIconImage(itemId, name) {
-    const a = document.createElement('a');
-    a.href = `/api?action=icon&item_id=${itemId}`;
-    a.download = `icon_${itemId}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-}
-
-async function loadHotfixItems(version) {
-    const section = document.getElementById('newItemsSection');
-    const grid = document.getElementById('itemsGrid');
-    const loading = document.getElementById('itemsLoadingState');
-    const empty = document.getElementById('itemsEmptyState');
-    const errorState = document.getElementById('itemsErrorState');
-    const errorMsg = document.getElementById('itemsErrorMsg');
-    const badge = document.getElementById('itemsCountBadge');
-
-    // Reset
-    grid.innerHTML = '';
-    grid.style.display = 'none';
-    loading.style.display = 'flex';
-    empty.style.display = 'none';
-    errorState.style.display = 'none';
-    section.style.display = 'block';
-
-    section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-    try {
-        const res = await fetch(`/api?action=hotfix-items&version=${encodeURIComponent(version)}`);
-        const data = await res.json();
-
-        loading.style.display = 'none';
-
-        if (!data.success) {
-            errorMsg.textContent = data.message || 'Failed to load item data.';
-            errorState.style.display = 'flex';
-            return;
-        }
-
-        const items = data.items || [];
-        badge.textContent = `${items.length} item${items.length !== 1 ? 's' : ''}`;
-        document.getElementById('itemsSubtitle').textContent =
-            `v${version} — bundles counted as one unit, outfit parts grouped`;
-
-        if (items.length === 0) {
-            empty.style.display = 'flex';
-            return;
-        }
-
-        grid.style.display = 'grid';
-        items.forEach(item => {
-            const catClass = getCategoryClass(item.category);
-            const card = document.createElement('div');
-            card.className = 'item-card';
-            card.innerHTML = `
-                <div class="item-card-icon">
-                    <div class="icon-loading" id="iload-${item.id}">
-                        <i class="fa-solid fa-circle-notch fa-spin text-zinc-700 text-sm"></i>
-                    </div>
-                    <img
-                        src="/api?action=icon&item_id=${item.id}"
-                        alt="${item.name || item.id}"
-                        style="display:none"
-                        onload="this.style.display='block'; document.getElementById('iload-${item.id}').style.display='none';"
-                        onerror="this.parentElement.innerHTML='<i class=\\'fa-solid fa-image-slash icon-placeholder\\'></i>';"
-                    />
-                </div>
-                <span class="item-card-category ${catClass}">${item.category || 'Item'}</span>
-                <span class="item-card-name" title="${item.name || item.name_id}">${item.name || item.name_id || '—'}</span>
-                <span class="item-card-id">#${item.id}</span>
-                <div class="item-card-actions">
-                    <div class="item-action-btn copy-id" title="Copy Item ID" onclick="navigator.clipboard.writeText('${item.id}').then(()=>showToast('ID copied','success'))">
-                        <i class="fa-solid fa-hashtag"></i>
-                    </div>
-                    <div class="item-action-btn copy-id" title="Copy Item Name" onclick="navigator.clipboard.writeText('${(item.name||'').replace(/'/g,"\\'")}').then(()=>showToast('Name copied','success'))">
-                        <i class="fa-solid fa-copy"></i>
-                    </div>
-                    <div class="item-action-btn dl-icon" title="Download Icon" onclick="downloadIconImage('${item.id}','${(item.name||item.id).replace(/'/g,"\\'")}')">
-                        <i class="fa-solid fa-download"></i>
-                    </div>
-                </div>
-            `;
-            grid.appendChild(card);
-        });
-
-        // Copy all IDs
-        document.getElementById('itemsCopyAllBtn').onclick = () => {
-            const all = items.map(i => `${i.id} — ${i.name}`).join('\n');
-            navigator.clipboard.writeText(all).then(() => showToast('All IDs copied', 'success'));
-        };
-
-    } catch (err) {
-        loading.style.display = 'none';
-        errorMsg.textContent = err.message || 'Network error loading item data.';
-        errorState.style.display = 'flex';
-    }
 }
 
 initSystemMatrix();
