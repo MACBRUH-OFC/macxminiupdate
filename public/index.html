@@ -689,7 +689,7 @@ function interceptDownloadZip(e, encodedUrl) {
 function downloadMasterBulkZip() {
     if(!activeCache.length) return;
     const targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
-    window.open(`https://ff-asset-extractor.vercel.app/api/extract?version=${encodeURIComponent(targetVersion)}&download_type=zip&mode=bulk_categorized`, '_blank');
+    window.open(`/api?action=bulk-zip&version=${encodeURIComponent(targetVersion)}`, '_blank');
 }
 
 function cleanPreviousMediaTracks() {
