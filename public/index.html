@@ -56,6 +56,8 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 
 .display-box-nexus { width: 100%; padding: 16px; border: 1px solid #1e1e2b; border-radius: 14px; background: #040406; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 800; font-size: 20px; font-family: 'Inter', sans-serif; letter-spacing: 0.05em; }
 .indicator-dot { width: 10px; height: 10px; background: var(--ff-emerald); border-radius: 50%; box-shadow: 0 0 12px var(--ff-emerald); animation: pulseDot 2s infinite; }
+.indicator-dot.offline { background: var(--ff-red); box-shadow: 0 0 12px var(--ff-red); }
+.indicator-dot.checking { background: var(--ff-cyan); box-shadow: 0 0 12px var(--ff-cyan); }
 
 @keyframes pulseDot {
     0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 163, 0.5); }
@@ -122,9 +124,9 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 
             <div class="flex-1 flex flex-col justify-center items-center w-full px-1 space-y-4">
                 <div id="wrapperAuto" class="w-full text-center">
-                    <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">New Miniupdate Version found</span>
+                    <span id="txtAutoHeaderLabel" class="block text-[11px] font-bold text-cyan-400 uppercase tracking-wide mb-2">Checking new miniupdate version...</span>
                     <div class="display-box-nexus">
-                        <div class="indicator-dot"></div>
+                        <div id="radarIndicatorDot" class="indicator-dot checking"></div>
                         <span id="txtAutoTarget" class="truncate text-white">---</span>
                     </div>
                 </div>
@@ -143,7 +145,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
                 <div id="statusIcon" class="text-zinc-600 flex-shrink-0"><i class="fa-solid fa-terminal text-xs"></i></div>
                 <div class="flex-1 min-w-0 text-left">
                     <span id="statusText" class="block text-[8px] font-black text-zinc-500 uppercase gff">System Status</span>
-                    <p id="statusDescText" class="text-[10px] text-zinc-400 truncate">Ready to scan live servers channels.</p>
+                    <p id="statusDescText" class="text-[10px] text-zinc-400 truncate">Initializing verification systems...</p>
                 </div>
                 <div id="statusBadge" class="text-[9px] gff px-2 py-0.5 bg-black rounded border border-zinc-900 text-zinc-500 flex-shrink-0">READY</div>
             </div>
@@ -211,9 +213,6 @@ let activeCache = [];
 let activeMode = "auto";
 let preCalculatedAutoVersion = "";
 
-// Holds data-payload representations directly inside local JavaScript runtime space
-let offlineDataPayloadSessionCache = {};
-
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
 
@@ -221,6 +220,8 @@ const pipelineTabs = document.getElementById("pipelineTabs");
 const wrapperAuto = document.getElementById("wrapperAuto");
 const wrapperManual = document.getElementById("wrapperManual");
 const txtAutoTarget = document.getElementById("txtAutoTarget");
+const txtAutoHeaderLabel = document.getElementById("txtAutoHeaderLabel");
+const radarIndicatorDot = document.getElementById("radarIndicatorDot");
 const inputVersion = document.getElementById("inputVersion");
 const extractBtn = document.getElementById("extractBtn");
 const btnIcon = document.getElementById("btnIcon");
@@ -246,17 +247,41 @@ pipelineTabs.addEventListener("click", (e) => {
 
 async function initSystemMatrix() {
     try {
+        txtAutoHeaderLabel.textContent = "Checking new miniupdate version...";
+        txtAutoHeaderLabel.className = "block text-[11px] font-bold text-cyan-400 uppercase tracking-wide mb-2";
+        radarIndicatorDot.className = "indicator-dot checking";
+        document.getElementById('statusDescText').innerText = "Scanning game distribution nodes for hotfixes...";
+
         const response = await fetch('/api/latest-version');
         const data = await response.json();
+        
         if (data.success && data.target_version) {
             preCalculatedAutoVersion = data.target_version;
             txtAutoTarget.textContent = preCalculatedAutoVersion;
+            
+            // Dynamic check if this matches an incremented structural target shift
+            if(data.target_version !== "Offline" && data.target_version !== "Error") {
+                txtAutoHeaderLabel.textContent = "New Miniupdate Version found";
+                txtAutoHeaderLabel.className = "block text-[11px] font-bold text-amber-400 uppercase tracking-wide mb-2";
+                radarIndicatorDot.className = "indicator-dot";
+                document.getElementById('statusDescText').innerText = "Live patch builds available for compilation extraction.";
+            }
         } else {
-            txtAutoTarget.textContent = "Offline";
+            fallbackToNoVersionState();
         }
     } catch {
-        txtAutoTarget.textContent = "Error";
+        fallbackToNoVersionState();
     }
+}
+
+function fallbackToNoVersionState() {
+    // Graceful presentation if Vercel endpoint doesn't serve a newer revision tier
+    txtAutoHeaderLabel.textContent = "No new version found. Continue with current version";
+    txtAutoHeaderLabel.className = "block text-[11px] font-bold text-zinc-500 uppercase tracking-wide mb-2";
+    radarIndicatorDot.className = "indicator-dot offline";
+    preCalculatedAutoVersion = "1.104.1"; // Base baseline structural fallback string safely presented
+    txtAutoTarget.textContent = preCalculatedAutoVersion;
+    document.getElementById('statusDescText').innerText = "Running stable system branch validation controls.";
 }
 
 function computeByteScale(bytes) {
@@ -392,9 +417,6 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
-        
-        // Tells the processor backend to output base64 data strings for direct local integration
-        formData.append('embed_payloads', 'true');
 
         const response = await fetch('/api/process', {
             method: 'POST',
@@ -416,16 +438,13 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             let displayName = asset.name || asset.fileName || "unnamed_asset";
             let rawType = asset.type || asset.label || "Unknown";
             
-            // Local Session ID assignments mapped directly to internal payload content
-            const uniqueTrackingKey = `offline_payload_${index}_${subIdx}_${Date.now()}`;
-            
-            // Pack base64 layout data completely offline into runtime variables
-            offlineDataPayloadSessionCache[uniqueTrackingKey] = asset.base64_data || asset.preview_url || asset.url;
+            // Connects directly to the Python server RAM caching proxy link path
+            let localizedStreamPath = asset.preview_url || asset.url || "";
 
             subRow.onclick = (e) => {
                 e.stopPropagation();
                 selectFile({ 
-                    id: uniqueTrackingKey,
+                    url: localizedStreamPath,
                     name: displayName, 
                     label: rawType
                 }, subRow);
@@ -435,7 +454,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
                     <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
                 </span>
-                <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Cached Offline'}</span>
+                <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Server Cached'}</span>
             `;
             sublist.appendChild(subRow);
         });
@@ -477,22 +496,10 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    // Pull directly from base64 memory object - requires completely zero network tracking!
-    let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
+    let liveSourceData = item.url;
     
     const ext = item.name.split('.').pop().toLowerCase();
     const lLabel = item.label.toLowerCase();
-
-    // Auto-detect and format clean base64 data headers if missing from extraction stream
-    if (liveSourceData.startsWith('ey') || (!liveSourceData.startsWith('data:') && !liveSourceData.startsWith('http'))) {
-        if (['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
-            liveSourceData = `data:audio/ogg;base64,${liveSourceData}`;
-        } else if (['mp4','webm'].includes(ext) || lLabel.includes('video')) {
-            liveSourceData = `data:video/mp4;base64,${liveSourceData}`;
-        } else if (['png','jpg','jpeg','webp'].includes(ext) || lLabel.includes('texture')) {
-            liveSourceData = `data:image/png;base64,${liveSourceData}`;
-        }
-    }
     
     const saveBtn = document.getElementById('singleSaveBtn');
     saveBtn.href = liveSourceData;
@@ -570,13 +577,8 @@ async function selectFile(item, element) {
     // Data Blueprints / Text Files / Configuration Scripts
     else {
         try {
-            let processedTextString = "";
-            if (liveSourceData.startsWith('data:')) {
-                const extractionStringParts = liveSourceData.split(',');
-                processedTextString = atob(extractionStringParts[1]);
-            } else {
-                processedTextString = liveSourceData;
-            }
+            const rawTextResponse = await fetch(liveSourceData);
+            const processedTextString = await rawTextResponse.text();
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -716,21 +718,3 @@ function initAudioContextEngine(audioElement, canvas, ctx) {
         for(let i = 0; i < bufferLength; i++) {
             const normalizedVal = dataArray[i] / 255;
             const barHeight = normalizedVal * h * 0.8;
-            ctx.fillStyle = `rgba(56, 189, 248, ${0.45 + normalizedVal})`;
-            ctx.fillRect(x, (h / 2) - (barHeight / 2), barWidth - 1, barHeight);
-            x += barWidth;
-        }
-    }
-    drawFullSymmetricWaves();
-}
-
-function formatTimeMetrics(secs) {
-    const m = Math.floor(secs / 60).toString().padStart(2, '0');
-    const s = Math.floor(secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-}
-
-initSystemMatrix();
-</script>
-</body>
-</html>
