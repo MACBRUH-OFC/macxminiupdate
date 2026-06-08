@@ -1,462 +1,696 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Garena Free Fire - Advanced Delta Asset Nexus</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        :root {
-            --bg-dark: #0f172a;
-            --panel-dark: #1e293b;
-            --accent-orange: #f97316;
-            --accent-orange-hover: #ea580c;
-            --text-light: #f8fafc;
-            --text-muted: #94a3b8;
-            --border-glow: #334155;
-            --success-green: #10b981;
-            --cyan-glow: #06b6d4;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Delta Asset Nexus & Extractor</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
-        body { background-color: var(--bg-dark); color: var(--text-light); min-height: 100vh; padding: 40px 20px; }
-        .container { max-width: 850px; margin: 0 auto; }
+<style>
+@font-face { font-family: 'GFF-Bold'; src: url('https://dl.dir.freefiremobile.com/common/web_event/common/fonts/website/GFFLatinW05-Bold.woff') format('woff'); }
+:root { --ff-yellow: #ffde00; --ff-emerald: #00ffa3; --ff-red: #ff3e3e; --ff-cyan: #38bdf8; }
+body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+.gff { font-family: 'GFF-Bold', sans-serif; }
 
-        header { text-align: center; margin-bottom: 35px; }
-        header h1 { font-size: 2.5rem; font-weight: 800; tracking: -0.05em; text-transform: uppercase; background: linear-gradient(to right, #f97316, #06b6d4); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
-        header p { color: var(--text-muted); font-size: 1rem; }
+.brand-strip { width: 100%; height: 60px; background: #000; border-b: 1px solid #111; display: flex; align-items: center; justify-content: center; position: relative; }
+.brand-line { width: 100%; height: 3px; background: var(--ff-yellow); box-shadow: 0 2px 10px rgba(255, 222, 0, 0.3); }
 
-        .card { background: var(--panel-dark); border-radius: 20px; border: 1px solid var(--border-glow); padding: 30px; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5); margin-bottom: 25px; }
+/* Master Grid Layout Workspace */
+.main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
+@media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
-        /* Segmented Mode Control Panel */
-        .mode-selector { display: flex; background: var(--bg-dark); padding: 6px; border-radius: 12px; border: 1px solid var(--border-glow); margin-bottom: 25px; position: relative; }
-        .mode-btn { flex: 1; text-align: center; padding: 12px; font-weight: 700; font-size: 0.9rem; cursor: pointer; border-radius: 8px; border: none; background: transparent; color: var(--text-muted); transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 8px; }
-        .mode-btn.active { background: var(--accent-orange); color: var(--text-light); box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3); }
+/* Rigid Uniform Layout Sizing Panel Rules */
+.uniform-panel { 
+    background: #09090d; border: 1px solid #181822; position: relative; 
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 530px; display: flex; 
+    flex-direction: column; transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1); min-width: 0; 
+}
 
-        label { display: block; margin-bottom: 10px; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
-        input[type="text"], .display-box { width: 100%; padding: 16px; border: 2px solid var(--border-glow); border-radius: 12px; font-size: 1rem; background: var(--bg-dark); color: var(--text-light); transition: all 0.3s ease; }
-        input[type="text"]:focus { outline: none; border-color: var(--accent-orange); box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.15); }
-        
-        .display-box { display: flex; align-items: center; gap: 12px; font-weight: 700; color: var(--cyan-glow); border-style: dashed; }
-        .input-hint { font-size: 0.8rem; color: var(--text-muted); margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+/* Precise Dynamic Adaptive Expansion for Low File Quantities to Prevent Cropping */
+.uniform-panel.fit-content-low { height: auto !important; min-height: 200px; }
+.uniform-panel.fit-content-low .scrollable-content-box { flex: none; height: auto; overflow: visible !important; }
+.fixed-preview-panel { height: 530px !important; }
 
-        .action-trigger { background: linear-gradient(135deg, var(--accent-orange), var(--accent-orange-hover)); color: white; border: none; padding: 16px; border-radius: 12px; font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 25px; transition: all 0.2s ease; text-transform: uppercase; letter-spacing: 0.02em; }
-        .action-trigger:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(249, 115, 22, 0.4); }
-        .action-trigger:disabled { background: #475569; color: var(--text-muted); cursor: not-allowed; transform: none; box-shadow: none; }
+@media (min-width: 1024px) {
+    .panel-1 { border-radius: 20px 0 0 20px; }
+    .panel-2 { border-radius: 0; }
+    .panel-3 { border-radius: 0 20px 20px 0; }
+}
+@media (max-width: 1023px) {
+    .uniform-panel { border-radius: 16px; margin-bottom: 16px; height: 530px !important; }
+    .uniform-panel.fit-content-low { height: auto !important; }
+}
 
-        .loading-wheel { display: none; text-align: center; padding: 20px; font-weight: 600; color: var(--accent-orange); gap: 10px; align-items: center; justify-content: center; }
-        .error-banner { color: #ef4444; background: rgba(239, 68, 68, 0.1); padding: 16px; border-radius: 12px; font-size: 0.95rem; margin-top: 20px; display: none; border: 1px solid rgba(239, 68, 68, 0.2); }
+.uniform-panel::before { content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--ff-yellow); z-index: 10; }
+.panel-body { padding: 22px; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.scrollable-content-box { flex: 1; background: #040406; border: 1px solid #13131a; border-radius: 14px; overflow: hidden; position: relative; }
 
-        /* Dynamic Result Grid Mapping */
-        .meta-grid { display: flex; gap: 15px; margin-bottom: 20px; }
-        .meta-tile { background: var(--panel-dark); padding: 15px 20px; border-radius: 14px; border: 1px solid var(--border-glow); flex: 1; display: flex; align-items: center; gap: 12px; }
-        .meta-tile i { font-size: 1.4rem; color: var(--accent-orange); }
-        .meta-tile.cyan i { color: var(--cyan-glow); }
-        .meta-tile div p { font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
-        .meta-tile div h3 { font-size: 1.1rem; font-weight: 700; }
+/* Switchable Mode Header Row Tabs */
+.tab-row { display: flex; background: #0f0f14; padding: 4px; border-radius: 10px; border: 1px solid #1b1b24; margin-bottom: 14px; gap: 4px; }
+.tab-btn { flex: 1; text-align: center; padding: 7px 4px; font-size: 11px; font-weight: 700; color: #8e8e93; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.tab-btn:hover { color: #fff; background: #14141c; }
+.tab-btn.active { background: #1a1a26; color: var(--ff-yellow); box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); }
 
-        /* Accordion File Rows & Embedded Assets Mapping */
-        .bundle-wrapper { border-radius: 14px; overflow: hidden; border: 1px solid var(--border-glow); background: var(--panel-dark); margin-bottom: 25px; }
-        .bundle-header-bar { background: #1e293b; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 0.95rem; border-bottom: 1px solid var(--border-glow); }
-        
-        .bundle-item-row { border-bottom: 1px solid var(--border-glow); background: var(--panel-dark); transition: background 0.2s; }
-        .bundle-item-row:last-child { border: none; }
-        .bundle-main-clickable { padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
-        .bundle-main-clickable:hover { background: #243249; }
-        
-        .file-identity { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 0.95rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-        .file-index { background: var(--bg-dark); color: var(--text-muted); width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; }
-        .file-specs { display: flex; align-items: center; gap: 15px; font-size: 0.85rem; color: var(--text-muted); font-weight: 600; }
-        
-        .icon-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer; padding: 4px; transition: color 0.2s; }
-        .icon-btn:hover { color: var(--accent-orange); }
+/* Extract Buttons Configurations */
+.btn-mechanical { cursor: pointer; font-family: 'GFF-Bold'; text-transform: uppercase; font-style: italic; display: flex; align-items: center; justify-content: center; border-radius: 14px; gap: 12px; background: var(--ff-yellow); color: #000; box-shadow: 0 5px 0 #bfa600; transition: all 0.1s; user-select: none; }
+.btn-mechanical:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #bfa600; }
+.btn-mechanical:disabled { background: #222226 !important; color: #55555c !important; box-shadow: 0 5px 0 #141416 !important; cursor: not-allowed; transform: none !important; opacity: 0.8; }
 
-        /* Extracted Sub-elements Region */
-        .extracted-tray { background: #111827; border-top: 1px solid #1e293b; display: none; padding: 10px 20px; max-height: 350px; overflow-y: auto; }
-        .extracted-asset { display: flex; align-items: center; justify-content: space-between; padding: 10px 8px; border-bottom: 1px solid #1f2937; font-size: 0.85rem; }
-        .extracted-asset:last-child { border: none; }
-        .asset-name-clickable { color: var(--cyan-glow); cursor: pointer; font-family: monospace; display: flex; align-items: center; gap: 8px; }
-        .asset-name-clickable:hover { text-decoration: underline; color: var(--text-light); }
+/* Modern Display Target Fields */
+.display-box-nexus { width: 100%; padding: 14px; border: 1px dashed #1e1e2b; border-radius: 14px; font-size: 11px; background: #07070a; color: #fff; display: flex; align-items: center; gap: 10px; font-weight: 700; }
+.display-box-nexus i { color: var(--ff-cyan); }
+.input-text-nexus { width: 100%; padding: 14px; border: 1px solid #1e1e2b; border-radius: 14px; font-size: 11px; background: #07070a; color: #fff; outline: none; transition: border-color 0.2s; }
+.input-text-nexus:focus { border-color: var(--ff-yellow); }
 
-        /* Dynamic Structural Multi-Media Preview Canvas Modals */
-        .preview-box { background: var(--bg-dark); border: 2px solid var(--border-glow); border-radius: 12px; padding: 20px; margin-top: 10px; display: none; text-align: center; position: relative; }
-        .preview-box h4 { font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); margin-bottom: 12px; text-align: left; display: flex; align-items: center; gap: 6px; }
-        .preview-content-area { max-width: 100%; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 8px; padding: 10px; min-height: 60px; }
-        .preview-content-area img { max-height: 240px; object-fit: contain; border-radius: 6px; }
-        .preview-content-area video, .preview-content-area audio { width: 100%; max-height: 300px; }
-        .text-preview { text-align: left; font-family: monospace; font-size: 0.75rem; color: #34d399; white-space: pre-wrap; width: 100%; max-height: 180px; overflow-y: auto; }
-        .close-preview-btn { position: absolute; top: 15px; right: 15px; font-size: 1rem; color: var(--text-muted); cursor: pointer; }
-        .close-preview-btn:hover { color: #ef4444; }
+/* Multi-Select Wide Filter Custom Dropdown Layout */
+.custom-dropdown { position: relative; width: auto; min-width: 130px; }
+.dropdown-trigger { background: #0e0e14; border: 1px solid #1e1e2b; padding: 8px 12px; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 700; color: #e4e4e7; transition: all 0.2s; gap: 8px; }
+.dropdown-trigger:hover { border-color: #3f3f46; background: #14141c; }
+.dropdown-menu { position: absolute; top: calc(100% + 6px); right: 0; background: #07070a; border: 1px solid #1e1e2b; border-radius: 10px; z-index: 50; max-height: 260px; width: 200px; overflow-y: auto; display: none; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
+.dropdown-menu.active { display: block; }
+.dropdown-item { padding: 9px 14px; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s; border-bottom: 1px solid #111116; color: #a1a1aa; }
+.dropdown-item:hover { background: #12121c; color: #fff; }
+.dropdown-item.selected { color: var(--ff-yellow); background: #0d0d14; font-weight: 600; }
 
-        /* Global Structural Operational Command Grid */
-        .bulk-operation-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
-        .bulk-btn { border: none; padding: 14px; border-radius: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; text-transform: uppercase; transition: all 0.2s; }
-        .bulk-btn.zip-all { background: linear-gradient(135deg, var(--success-green), #059669); color: white; }
-        .bulk-btn.zip-all:hover { opacity: 0.95; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
-        .bulk-btn.txt-log { background: #334155; color: var(--text-light); }
-        .bulk-btn.txt-log:hover { background: #475569; }
+/* Sub Container Trays */
+.accordion-tray { background: #050508; border-top: 1px solid #12121a; padding: 10px 14px; display: none; }
+.sub-asset-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #14141f; font-size: 10px; }
+.sub-asset-row:last-child { border: none; }
 
-        .toast { position: fixed; bottom: 25px; left: 50%; transform: translateX(-50%); background: #0f172a; border: 1px solid var(--accent-orange); color: white; padding: 12px 25px; border-radius: 30px; font-size: 0.85rem; font-weight: 600; z-index: 2000; display: none; box-shadow: 0 10px 25px -5px rgba(249, 115, 22, 0.4); }
-    </style>
+/* Cinematic Proportional Aspect Windows Viewports */
+.aspect-16-9-viewport { width: 100%; height: 100%; background: #020203; border-radius: 10px; border: 1px solid #101016; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; flex: 1; }
+@media (min-width: 400px) { .aspect-16-9-viewport { aspect-ratio: 16 / 9; height: auto; } }
+
+/* Full Frame Viewport Expansion Framework for Meshes, JSON, and Text Objects */
+.full-viewport-mesh { height: 100% !important; aspect-ratio: auto !important; }
+
+/* Custom Premium Player Isolated Layout Mechanics Module */
+.custom-player-wrapper { display: flex; flex-direction: column; width: 100%; height: 100%; justify-content: space-between; padding: 2px; background: transparent; position: relative; }
+.custom-control-bar { height: 44px; background: #0c0c12; border: 1px solid #1b1b26; border-radius: 10px; display: flex; align-items: center; padding: 0 12px; gap: 14px; margin-top: 8px; flex-shrink: 0; }
+.player-progress-slider { flex: 1; -webkit-appearance: none; appearance: none; height: 4px; background: #1c1c28; border-radius: 2px; outline: none; cursor: pointer; }
+.player-progress-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; border-radius: 50%; background: var(--ff-yellow); box-shadow: 0 0 6px var(--ff-yellow); }
+
+/* Premium Non-Destructive Vector Render Architecture */
+.pixelated-render { max-width: 100%; max-height: 100%; object-fit: contain; width: auto; height: auto; padding: 8px; image-rendering: pixelated; background-image: linear-gradient(45deg, #050508 25%, transparent 25%), linear-gradient(-45deg, #050508 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #050508 75%), linear-gradient(-45deg, transparent 75%, #050508 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+#audioVisualizerCanvas { width: 100%; height: 100%; background: #020204; display: block; }
+.babylon-canvas-viewport { width: 100%; height: 100%; display: block; outline: none; background: #060609; }
+
+/* Cinematic Overlaid Center-Deck Play Buttons */
+.center-play-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.25); border-radius: 10px; transition: all 0.25s ease; z-index: 20; cursor: pointer; }
+.center-play-overlay.playing-hide { opacity: 0; pointer-events: none; transform: scale(1.15); }
+.center-play-btn-circle { width: 48px; height: 48px; background: rgba(255, 222, 0, 0.9); border: 2px solid #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #000; box-shadow: 0 0 20px rgba(255, 222, 0, 0.4); font-size: 14px; transition: transform 0.2s; }
+.center-play-overlay:hover .center-play-btn-circle { transform: scale(1.08); background: #fff; }
+
+.custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #1c1c24; border-radius: 10px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--ff-yellow); }
+</style>
 </head>
 <body>
 
-<div class="container">
-    <header>
-        <h1>Asset Nexus</h1>
-        <p>Advanced Free Fire Mini-Update Decrypter & Asset Extractor Engine</p>
-    </header>
+<div class="brand-strip">
+    <img src="https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png" class="h-7 object-contain" alt="Free Fire Logo">
+</div>
+<div class="brand-line"></div>
 
-    <main>
-        <div class="card">
-            <div class="mode-selector">
-                <button class="mode-btn active" id="btnAuto"><i class="fas fa-radar"></i> Auto Radar</button>
-                <button class="mode-btn" id="btnManual"><i class="fas fa-sliders"></i> Manual Console</button>
-            </div>
-
-            <div id="wrapperAuto">
-                <label>Active Managed Pipeline Stream Target</label>
-                <div class="display-box">
-                    <i class="fas fa-server"></i>
-                    <span id="txtAutoTarget">Connecting structural matrix gateway...</span>
-                </div>
-            </div>
-
-            <div id="wrapperManual" style="display: none;">
-                <label for="inputVersion">Patch Version String or Endpoint URL</label>
-                <input type="text" id="inputVersion" placeholder="e.g., 1.123.18 or direct patch manifest asset link" />
-                <p class="input-hint"><i class="fas fa-terminal"></i> Enter structural parameters manually to fetch diff logs.</p>
-            </div>
-
-            <button class="action-trigger" id="btnTrigger"><i class="fas fa-crosshairs"></i> Synchronize Target Parameters</button>
-            <div id="spinner" class="loading-wheel"><i class="fas fa-circle-notch fa-spin"></i> Analyzing structural update mappings...</div>
-            <div id="errorBox" class="error-banner"></div>
-        </div>
-
-        <div id="panelResults" style="display: none;">
-            <div class="meta-grid">
-                <div class="meta-tile">
-                    <i class="fas fa-network-wired"></i>
-                    <div>
-                        <p>Tracked Branch</p>
-                        <h3 id="lblVersion">v0.0.0</h3>
-                    </div>
-                </div>
-                <div class="meta-tile cyan">
-                    <i class="fas fa-weight-hanging"></i>
-                    <div>
-                        <p>Delta Catalog Weight</p>
-                        <h3 id="lblSize">0.00 MB</h3>
-                    </div>
-                </div>
-            </div>
-
-            <div class="bundle-wrapper">
-                <div class="bundle-header-bar">
-                    <span><i class="fas fa-cubes"></i> Modified Packages Mapped</span>
-                    <span class="result-count" id="lblCount">0 Entries Mapped</span>
-                </div>
-                <div id="containerFiles"></div>
-            </div>
-
-            <div class="bulk-operation-panel">
-                <button class="bulk-btn zip-all" id="btnExtractAllZip"><i class="fas fa-file-zipper"></i> Extract All to Categorized ZIP</button>
-                <button class="bulk-btn txt-log" id="btnLogTxt"><i class="fas fa-receipt"></i> Export Log Sheet</button>
-            </div>
-        </div>
-    </main>
+<div class="flex flex-col items-center pt-8 pb-6 px-4 select-none">
+    <div class="text-center gff tracking-tight">
+        <span class="text-[40px] md:text-[54px] font-black italic block leading-[0.8]">DELTA ASSET</span>
+        <span class="text-[40px] md:text-[54px] font-black italic block text-[#ffde00] leading-[0.9]">NEXUS ENGINE</span>
+    </div>
+    <div class="flex items-center gap-3 mt-4 opacity-75">
+        <svg class="w-3.5 h-3.5 text-[#ffde00]" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+        <span class="text-[10px] md:text-[11px] font-bold tracking-[0.22em] uppercase text-zinc-400">AUTOMATIC RADAR • MANIFEST PARSER</span>
+        <svg class="w-3.5 h-3.5 text-[#ffde00]" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+    </div>
 </div>
 
-<div id="toastNotification" class="toast"></div>
+<div class="main-grid-container">
+    <div class="uniform-panel panel-1">
+        <div class="panel-body justify-between space-y-4">
+            <div>
+                <h2 class="text-xs font-black text-white uppercase tracking-wider mb-1 gff">Pipeline Target</h2>
+                <p class="text-[11px] text-zinc-500 mb-3">Select live automated network intercept or manual configuration mapping.</p>
+                
+                <div class="tab-row" id="pipelineTabs">
+                    <div class="tab-btn active" data-mode="auto"><i class="fa-solid fa-radar text-[10px]"></i>Auto Radar</div>
+                    <div class="tab-btn" data-mode="manual"><i class="fa-solid fa-sliders text-[10px]"></i>Manual</div>
+                </div>
+            </div>
+            
+            <div class="flex-1 flex flex-col justify-center min-w-0 m-0 space-y-3">
+                <div id="wrapperAuto">
+                    <span class="block text-[9px] font-black text-zinc-500 uppercase gff mb-1">Active Pipeline Gateway Target</span>
+                    <div class="display-box-nexus">
+                        <i class="fa-solid fa-server animate-pulse"></i>
+                        <span id="txtAutoTarget" class="truncate text-zinc-400">Connecting structural matrix gateway...</span>
+                    </div>
+                </div>
+
+                <div id="wrapperManual" class="hidden">
+                    <span class="block text-[9px] font-black text-zinc-500 uppercase gff mb-1">Patch Version / Target Manifest URL</span>
+                    <input type="text" id="inputVersion" class="input-text-nexus" placeholder="e.g., 1.123.18 or .unity3d patch link">
+                </div>
+                
+                <button id="extractBtn" class="btn-mechanical w-full h-12 text-sm font-bold italic flex-shrink-0">
+                    <i class="fa-solid fa-crosshairs" id="btnIcon"></i> <span id="btnText">Synchronize Target</span>
+                </button>
+            </div>
+            
+            <div class="bg-[#0b0b10] border border-zinc-900 rounded-xl p-3 flex items-center gap-3 flex-shrink-0 min-w-0">
+                <div id="statusIcon" class="text-zinc-600 flex-shrink-0"><i class="fa-solid fa-terminal text-xs"></i></div>
+                <div class="flex-1 min-w-0 text-left">
+                    <span id="statusText" class="block text-[8px] font-black text-zinc-500 uppercase gff">Log Stream</span>
+                    <p id="statusDescText" class="text-[10px] text-zinc-400 truncate">Establish synchronization target constraints.</p>
+                </div>
+                <div id="statusBadge" class="text-[9px] gff px-2 py-0.5 bg-black rounded border border-zinc-900 text-zinc-500 flex-shrink-0">IDLE</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="listWindowPanel" class="uniform-panel panel-2">
+        <div class="panel-body">
+            <div class="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3 flex-shrink-0 min-w-0">
+                <div class="min-w-0 text-left mr-2">
+                    <h2 class="text-xs font-black text-white uppercase tracking-wider gff">Modified Packages Mapped</h2>
+                    <p id="cacheCounterText" class="text-[10px] text-zinc-500 truncate">0 packages found</p>
+                </div>
+                <div class="flex items-center gap-2 hidden" id="listActions">
+                    <div class="custom-dropdown" id="filterDropdown">
+                        <div class="dropdown-trigger" id="filterTrigger">
+                            <span><i class="fa-solid fa-filter text-[10px] mr-1.5 text-zinc-400"></i>Filter</span> 
+                            <i class="fa-solid fa-chevron-down text-[9px] flex-shrink-0 text-zinc-500"></i>
+                        </div>
+                        <div class="dropdown-menu custom-scrollbar" id="filterMenu"></div>
+                    </div>
+                    <button onclick="downloadMasterBulkZip()" title="Extract All Files into Structured Categorized ZIP" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-yellow-500 hover:text-white hover:bg-yellow-500 hover:border-yellow-500 transition-all shadow-md flex-shrink-0">
+                        <i class="fa-solid fa-file-zipper text-xs"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="scrollable-content-box flex-1 flex flex-col">
+                <div id="listEmptyState" class="flex-1 flex flex-col items-center justify-center text-zinc-700 p-8 text-center">
+                    <i class="fa-solid fa-folder-tree text-2xl mb-3 text-zinc-800"></i>
+                    <span class="text-[9px] font-bold gff uppercase tracking-widest text-zinc-600 block">System Standby</span>
+                    <p class="text-[10px] text-zinc-500 max-w-[180px] mt-1 leading-normal">Synchronize delta channels to read updated files tree structure layouts.</p>
+                </div>
+                <div id="listLoadingState" class="hidden flex-1 flex flex-col items-center justify-center text-zinc-500 p-8 text-center">
+                    <i class="fa-solid fa-circle-notch fa-spin text-yellow-500 text-xl mb-3"></i>
+                    <span class="text-[10px] font-bold gff uppercase tracking-wider text-zinc-400">Parsing manifest tree mapping logs...</span>
+                </div>
+                <div id="fileList" class="hidden flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-w-0"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="previewTargetWorkspace" class="uniform-panel panel-3 fixed-preview-panel">
+        <div class="panel-body">
+            <div class="mb-4 border-b border-zinc-900 pb-3 flex-shrink-0">
+                <h2 class="text-xs font-black text-white uppercase tracking-wider gff">Live Preview Workspace Monitor Canvas</h2>
+                <p class="text-[10px] text-zinc-500">Real-time asset player matrix pipeline.</p>
+            </div>
+            <div class="scrollable-content-box bg-black flex flex-col p-2">
+                <div id="previewFallback" class="flex-1 flex flex-col items-center justify-center text-zinc-800 p-4">
+                    <i class="fa-solid fa-eye text-xl mb-2"></i>
+                    <span class="text-[9px] font-bold gff uppercase tracking-wide">Select an Extracted File Layer Asset</span>
+                </div>
+                <div id="previewContent" class="hidden flex-1 flex flex-col min-w-0 overflow-hidden justify-between h-full">
+                    <div id="mediaBox" class="w-full flex flex-col min-h-0 flex-1 justify-center h-full relative"></div>
+                    <div class="mt-3 bg-[#0d0d14] p-2 rounded-xl border border-zinc-900 flex items-center justify-between gap-3 flex-shrink-0 min-w-0">
+                        <div class="min-w-0 flex-1 text-left px-1">
+                            <p id="mediaTitle" class="text-[11px] font-bold text-zinc-300 truncate">Asset Element</p>
+                            <p id="mediaTypeLabel" class="text-[8px] font-black text-zinc-600 uppercase gff tracking-wider">Type</p>
+                        </div>
+                        <a id="singleSaveBtn" href="#" target="_blank" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-yellow-500 transition-all flex-shrink-0">
+                            <i class="fa-solid fa-download text-xs"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>
-    let activeDataPayload = { version: '', files: [] };
-    let preCalculatedAutoVersion = "";
-    let activeMode = "auto";
+let activeCache = [];
+let selectedFilters = new Set();
+let activeMode = "auto";
+let preCalculatedAutoVersion = "";
 
-    // Structural Elements Mapping Core Links
-    const btnAuto = document.getElementById('btnAuto');
-    const btnManual = document.getElementById('btnManual');
-    const wrapperAuto = document.getElementById('wrapperAuto');
-    const wrapperManual = document.getElementById('wrapperManual');
-    const txtAutoTarget = document.getElementById('txtAutoTarget');
-    const inputVersion = document.getElementById('inputVersion');
-    const btnTrigger = document.getElementById('btnTrigger');
-    const spinner = document.getElementById('spinner');
-    const errorBox = document.getElementById('errorBox');
-    const panelResults = document.getElementById('panelResults');
-    const containerFiles = document.getElementById('containerFiles');
-    const lblVersion = document.getElementById('lblVersion');
-    const lblSize = document.getElementById('lblSize');
-    const lblCount = document.getElementById('lblCount');
-    const btnExtractAllZip = document.getElementById('btnExtractAllZip');
-    const btnLogTxt = document.getElementById('btnLogTxt');
-    const toastNotification = document.getElementById('toastNotification');
+const FILTER_ORDER = ["2D Texture", "Mesh", "Audio", "Video", "Text", "JSON"];
 
-    // UI Panel Interlocking Switch Actions
-    btnAuto.addEventListener('click', () => toggleMode('auto'));
-    btnManual.addEventListener('click', () => toggleMode('manual'));
+let audioCtx, audioSource, audioAnalyser, audioAnimationId;
+let babylonEngine, babylonScene;
 
-    function toggleMode(mode) {
-        activeMode = mode;
-        if (mode === 'auto') {
-            btnAuto.classList.add('active');
-            btnManual.classList.remove('active');
-            wrapperAuto.style.display = 'block';
-            wrapperManual.style.display = 'none';
+const pipelineTabs = document.getElementById("pipelineTabs");
+const wrapperAuto = document.getElementById("wrapperAuto");
+const wrapperManual = document.getElementById("wrapperManual");
+const txtAutoTarget = document.getElementById("txtAutoTarget");
+const inputVersion = document.getElementById("inputVersion");
+const extractBtn = document.getElementById("extractBtn");
+const btnIcon = document.getElementById("btnIcon");
+const btnText = document.getElementById("btnText");
+const fileList = document.getElementById("fileList");
+const listWindowPanel = document.getElementById("listWindowPanel");
+
+// Handle Tabs Shift Realignment Matrix
+pipelineTabs.addEventListener("click", (e) => {
+    const target = e.target.closest(".tab-btn");
+    if (!target) return;
+    document.querySelectorAll("#pipelineTabs .tab-btn").forEach(btn => btn.classList.remove("active"));
+    target.classList.add("active");
+    activeMode = target.dataset.mode;
+
+    if(activeMode === "auto") {
+        wrapperAuto.classList.remove("hidden");
+        wrapperManual.classList.add("hidden");
+    } else {
+        wrapperAuto.classList.add("hidden");
+        wrapperManual.classList.remove("hidden");
+    }
+});
+
+// Structural initialization systems mapping loop logic 
+async function initSystemMatrix() {
+    try {
+        const response = await fetch('/api/latest-version');
+        const data = await response.json();
+        if (data.success && data.target_version) {
+            preCalculatedAutoVersion = data.target_version;
+            txtAutoTarget.textContent = `${preCalculatedAutoVersion} (Dynamic Intercept Verified)`;
         } else {
-            btnManual.classList.add('active');
-            btnAuto.classList.remove('active');
-            wrapperAuto.style.display = 'none';
-            wrapperManual.style.display = 'block';
+            txtAutoTarget.textContent = "Unable to read dynamic pipeline versions.";
         }
+    } catch {
+        txtAutoTarget.textContent = "Failed structural sync handshake protocols.";
+    }
+}
+
+function computeByteScale(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + ['Bytes', 'KB', 'MB', 'GB'][i];
+}
+
+// Master Fetch Sync Engine Integration Loop Routine
+extractBtn.onclick = async () => {
+    let targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
+    if(!targetVersion) {
+        document.getElementById('statusDescText').innerText = "Provide target build parameter matrix guidelines.";
+        return;
     }
 
-    // Handshake system initialization setup matrix
-    async function initSystemMatrix() {
-        try {
-            const response = await fetch('/api/latest-version');
-            const data = await response.json();
-            if (data.success && data.target_version) {
-                preCalculatedAutoVersion = data.target_version;
-                txtAutoTarget.textContent = `${preCalculatedAutoVersion} (Dynamic Intercept Verified)`;
-            } else {
-                txtAutoTarget.textContent = "Unable to read tracking branch metadata updates.";
-            }
-        } catch {
-            txtAutoTarget.textContent = "Failed handshake connectivity protocols with system proxy.";
-        }
-    }
+    extractBtn.disabled = true;
+    btnIcon.className = "fa-solid fa-circle-notch fa-spin text-black";
+    btnText.innerText = "Synchronizing...";
 
-    function computeByteScale(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const i = Math.floor(Math.log(bytes) / Math.log(1024));
-        return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + ['Bytes', 'KB', 'MB', 'GB'][i];
-    }
+    document.getElementById('statusBadge').innerText = "SYNCING";
+    document.getElementById('statusBadge').style.color = "var(--ff-yellow)";
+    document.getElementById('statusText').innerText = "PROCESSING";
+    document.getElementById('statusDescText').innerText = `Polling delta configurations...`;
+    
+    document.getElementById('listEmptyState').classList.add('hidden');
+    document.getElementById('listLoadingState').classList.remove('hidden');
+    fileList.classList.add('hidden');
+    document.getElementById('listActions').classList.add('hidden');
 
-    // Dynamic Engine Operational Runner
-    async function triggerDeltaSync() {
-        errorBox.style.display = 'none';
-        panelResults.style.display = 'none';
+    try {
+        const res = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
+        const data = await res.json();
+        if(!data.success) throw new Error(data.message || "Failed dynamic matrix parsing logs.");
+
+        activeCache = data.files || [];
+        selectedFilters.clear();
         
-        let targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
-        if(!targetVersion) return triggerVisualAlert("Provide computational target build version metrics.");
+        document.getElementById('listLoadingState').classList.add('hidden');
+        renderList(); 
+        updateFilterMenu();
+        
+        document.getElementById('listActions').classList.remove('hidden');
+        fileList.classList.remove('hidden');
+        
+        document.getElementById('statusBadge').innerText = "SUCCESS";
+        document.getElementById('statusBadge').style.color = "var(--ff-emerald)";
+        document.getElementById('statusDescText').innerText = `Mapped updates: found ${activeCache.length} bundles.`;
 
-        spinner.style.display = 'flex';
-        btnTrigger.disabled = true;
+        document.getElementById('listWindowPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (err) {
+        document.getElementById('statusBadge').innerText = "FAILED";
+        document.getElementById('statusBadge').style.color = "var(--ff-red)";
+        document.getElementById('statusDescText').innerText = err.message;
+        document.getElementById('listLoadingState').classList.add('hidden');
+        document.getElementById('listEmptyState').classList.remove('hidden');
+    } finally {
+        extractBtn.disabled = false;
+        btnIcon.className = "fa-solid fa-crosshairs";
+        btnText.innerText = "Synchronize Target";
+    }
+};
 
-        try {
-            const response = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
-            const data = await response.json();
-            
-            if(!data.success) throw new Error(data.message || "Failed analytical parsing loops.");
-
-            activeDataPayload = data;
-            lblVersion.textContent = `Build v${data.version}`;
-            lblSize.textContent = computeByteScale(data.totalSize);
-            lblCount.textContent = `${data.files.length} Packages Verified`;
-
-            if(data.files.length === 0) {
-                containerFiles.innerHTML = '<div class="no-changes">Clean baseline context status: zero modifications found.</div>';
-            } else {
-                containerFiles.innerHTML = data.files.map((file, index) => `
-                    <div class="bundle-item-row" id="row-${index}">
-                        <div class="bundle-main-clickable" onclick="togglePackageExtraction(${index})">
-                            <div class="file-identity">
-                                <span class="file-index">${index + 1}</span>
-                                <span title="${file.fileName}">${file.fileName}</span>
-                            </div>
-                            <div class="file-specs">
-                                <span>${computeByteScale(file.size)}</span>
-                                <button class="icon-btn" title="Download ZIP Archive of Extracted Assets" onclick="interceptDownload(event, '${file.url}', 'zip')">
-                                    <i class="fas fa-file-zipper"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="extracted-tray" id="tray-${index}">
-                            <div class="loading-wheel" id="loader-${index}" style="display:flex;"><i class="fas fa-cog fa-spin"></i> Triggering Extraction API Pipeline...</div>
-                            <div id="asset-list-${index}"></div>
-                        </div>
+function renderList() {
+    fileList.innerHTML = "";
+    document.getElementById('cacheCounterText').innerText = `${activeCache.length} Modified elements matching logs`;
+    
+    if(activeCache.length === 0) {
+        document.getElementById('listEmptyState').classList.remove('hidden');
+        return;
+    }
+    document.getElementById('listEmptyState').classList.add('hidden');
+    
+    activeCache.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = "flex flex-col rounded-xl bg-[#0b0b0f] border border-zinc-900 overflow-hidden min-w-0 mb-1";
+        row.innerHTML = `
+            <div class="flex items-center justify-between p-3 cursor-pointer hover:bg-[#111116] group" onclick="toggleAccordionTray(${index}, '${encodeURIComponent(item.url)}')">
+                <div class="flex items-center gap-3 min-w-0 flex-1 text-left">
+                    <div class="w-7 h-7 rounded-lg bg-black flex items-center justify-center border border-zinc-900 flex-shrink-0 text-[10px] text-zinc-500 font-bold">
+                        ${index + 1}
                     </div>
-                `).join('');
-            }
-            panelResults.style.display = 'block';
-        } catch (e) {
-            triggerVisualAlert(e.message);
-        } finally {
-            spinner.style.display = 'none';
-            btnTrigger.disabled = false;
-        }
-    }
-
-    // Accordion Control Panel Matrix mapping Live Extraction Assets Pipeline
-    async function togglePackageExtraction(index) {
-        const tray = document.getElementById(`tray-${index}`);
-        const loader = document.getElementById(`loader-${index}`);
-        const listContainer = document.getElementById(`asset-list-${index}`);
-        
-        if (tray.style.display === 'block') {
-            tray.style.display = 'none';
-            return;
-        }
-
-        tray.style.display = 'block';
-        
-        // Skip calling the API again if already loaded
-        if (listContainer.children.length > 0) return;
-
-        try {
-            const targetPackageUrl = activeDataPayload.files[index].url;
-            
-            // Call the shared global extraction parser asset endpoint
-            const extractionUrl = `https://ff-asset-extractor.vercel.app/api/extract?url=${encodeURIComponent(targetPackageUrl)}`;
-            const res = await fetch(extractionUrl);
-            const extractedData = await res.json();
-
-            loader.style.display = 'none';
-
-            if (!extractedData.success || !extractedData.assets || extractedData.assets.length === 0) {
-                listContainer.innerHTML = '<div class="no-changes" style="padding:10px 0;">No extractable internal asset structures found inside bundle container.</div>';
-                return;
-            }
-
-            listContainer.innerHTML = extractedData.assets.map((asset, assetIdx) => {
-                let categoryIcon = "fa-file";
-                if (asset.type === "audio") categoryIcon = "fa-file-audio";
-                else if (asset.type === "video") categoryIcon = "fa-file-video";
-                else if (asset.type === "image") categoryIcon = "fa-file-image";
-                else if (asset.type === "text") categoryIcon = "fa-file-lines";
-
-                return `
-                    <div class="extracted-asset">
-                        <span class="asset-name-clickable" onclick="handleAssetPreview(event, ${index}, ${assetIdx}, '${escapeHtml(asset.name)}', '${asset.preview_url}', '${asset.type}')">
-                            <i class="fas ${categoryIcon}"></i> ${asset.name}
-                        </span>
-                        <div class="file-specs">
-                            <span>${asset.size ? computeByteScale(asset.size) : 'Stream Target'}</span>
-                            <button class="icon-btn" title="Download Asset File" onclick="event.stopPropagation(); window.open('${asset.preview_url}', '_blank')">
-                                <i class="fas fa-circle-down"></i>
-                            </button>
-                        </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[11px] font-bold text-zinc-300 truncate group-hover:text-white">${item.fileName}</p>
+                        <p class="text-[8px] font-medium text-zinc-600 tracking-wider">${computeByteScale(item.size)}</p>
                     </div>
-                    <div class="preview-box" id="preview-${index}-${assetIdx}"></div>
-                `;
-            }).join('');
-
-        } catch (err) {
-            loader.style.display = 'none';
-            listContainer.innerHTML = `<div class="no-changes" style="padding:10px 0; color:#ef4444;">Extraction Pipeline Error: ${err.message}</div>`;
-        }
-    }
-
-    // Contextual Multi-Media Content Render Manager Matrix Engine
-    function handleAssetPreview(event, fileIdx, assetIdx, name, url, type) {
-        event.stopPropagation();
-        const elementId = `preview-${fileIdx}-${assetIdx}`;
-        const pBox = document.getElementById(elementId);
-
-        if (pBox.style.display === 'block') {
-            pBox.style.display = 'none';
-            pBox.innerHTML = '';
-            return;
-        }
-
-        // Collapse any other open previews within the same folder space
-        const parentTray = document.getElementById(`asset-list-${fileIdx}`);
-        parentTray.querySelectorAll('.preview-box').forEach(box => {
-            box.style.display = 'none';
-            box.innerHTML = '';
-        });
-
-        pBox.innerHTML = `
-            <span class="close-preview-btn" onclick="event.stopPropagation(); closePreviewContainer('${elementId}')"><i class="fas fa-circle-xmark"></i></span>
-            <h4><i class="fas fa-play-circle"></i> Media Canvas Preview Monitor: ${name}</h4>
-            <div class="preview-content-area" id="canvas-${fileIdx}-${assetIdx}">
-                <i class="fas fa-spinner fa-spin" style="color:var(--accent-orange)"></i> Loading file layer structure...
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0 ml-2">
+                    <button class="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-yellow-500" title="Download Parent Bundle ZIP Asset Archive" onclick="interceptDownloadZip(event, '${encodeURIComponent(item.url)}')">
+                        <i class="fa-solid fa-file-zipper text-[10px]"></i>
+                    </button>
+                    <i id="arrow-${index}" class="fa-solid fa-chevron-down text-[9px] text-zinc-600 transition-transform"></i>
+                </div>
             </div>
-            <button class="bulk-btn txt-log" style="margin-top:12px; padding:8px; font-size:0.8rem;" onclick="event.stopPropagation(); window.open('${url}', '_blank')">
-                <i class="fas fa-arrow-down-to-line"></i> Download Source File Element
-            </button>
+            <div class="accordion-tray" id="tray-${index}">
+                <div class="text-[10px] text-zinc-500 py-2 text-center" id="loader-${index}"><i class="fa-solid fa-cog fa-spin text-yellow-500 mr-2"></i>Triggering Extraction API Pipeline...</div>
+                <div class="space-y-1" id="sublist-${index}"></div>
+            </div>
         `;
-        pBox.style.display = 'block';
+        fileList.appendChild(row);
+    });
+}
 
-        const canvas = document.getElementById(`canvas-${fileIdx}-${assetIdx}`);
+// Live Inline Sub Container Accordion Management Array Mapping logic
+async function toggleAccordionTray(index, encodedUrl) {
+    const tray = document.getElementById(`tray-${index}`);
+    const arrow = document.getElementById(`arrow-${index}`);
+    const sublist = document.getElementById(`sublist-${index}`);
+    const loader = document.getElementById(`loader-${index}`);
+    const url = decodeURIComponent(encodedUrl);
 
-        // Direct stream context injection pipeline
-        if (type === 'image') {
-            canvas.innerHTML = `<img src="${url}" alt="${name}" onerror="this.src='https://placehold.co/400x200/1e293b/94a3b8?text=Image+Load+Error'"/>`;
-        } else if (type === 'audio') {
-            canvas.innerHTML = `<audio controls autoplay src="${url}"></audio>`;
-        } else if (type === 'video') {
-            canvas.innerHTML = `<video controls autoplay src="${url}"></video>`;
-        } else if (type === 'text') {
-            fetch(url).then(r => r.text()).then(txt => {
-                canvas.innerHTML = `<div class="text-preview">${escapeHtml(txt)}</div>`;
-            }).catch(() => {
-                canvas.innerHTML = `<div class="no-changes">Unable to stream raw plain text output matrices.</div>`;
-            });
-        } else {
-            canvas.innerHTML = `<div class="no-changes"><i class="fas fa-file-shield" style="font-size:1.5rem;"></i><br/>Preview unavailable for raw encrypted binary structures.</div>`;
+    if (tray.style.display === "block") {
+        tray.style.display = "none";
+        arrow.style.transform = "rotate(0deg)";
+        return;
+    }
+
+    tray.style.display = "block";
+    arrow.style.transform = "rotate(185deg)";
+
+    if (sublist.children.length > 0) return; // Cached response verification skip logic
+
+    try {
+        const response = await fetch(`https://ff-asset-extractor.vercel.app/api/extract?url=${encodeURIComponent(url)}`);
+        const extractedData = await response.json();
+        loader.style.display = "none";
+
+        if (!extractedData.success || !extractedData.assets || extractedData.assets.length === 0) {
+            sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1">No extractable asset types located inside container bundles.</div>`;
+            return;
+        }
+
+        extractedData.assets.forEach((asset, assetIdx) => {
+            const subRow = document.createElement('div');
+            subRow.className = "sub-asset-row hover:bg-zinc-950 p-1.5 rounded cursor-pointer text-left";
+            subRow.onclick = (e) => {
+                e.stopPropagation();
+                selectFile({ name: asset.name, label: asset.type, preview_url: asset.preview_url }, subRow);
+            };
+            subRow.innerHTML = `
+                <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
+                    <i class="fa-solid ${getIcon(asset.type)} opacity-60"></i> ${asset.name}
+                </span>
+                <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Stream Target'}</span>
+            `;
+            sublist.appendChild(subRow);
+        });
+    } catch {
+        loader.style.display = "none";
+        sublist.innerHTML = `<div class="text-[9px] text-red-500 py-1">Extraction failure routing pipeline request parameters.</div>`;
+    }
+}
+
+function getIcon(label) {
+    const l = label.toLowerCase();
+    if(l.includes('texture') || l.includes('image')) return 'fa-image text-yellow-500';
+    if(l.includes('audio')) return 'fa-volume-high text-cyan-400';
+    if(l.includes('mesh')) return 'fa-cube text-purple-400';
+    if(l.includes('video')) return 'fa-play-circle text-red-500';
+    if(l.includes('json')) return 'fa-file-lines text-emerald-400';
+    return 'fa-file-code text-zinc-500';
+}
+
+async function selectFile(item, element) {
+    cleanPreviousMediaTracks();
+
+    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
+    if(element) element.classList.add('bg-zinc-900', 'text-white');
+
+    document.getElementById('previewFallback').classList.add('hidden');
+    document.getElementById('previewContent').classList.remove('hidden');
+    
+    const mediaBox = document.getElementById('mediaBox');
+    document.getElementById('mediaTitle').innerText = item.name;
+    document.getElementById('mediaTypeLabel').innerText = item.label;
+    
+    const url = item.preview_url;
+    document.getElementById('singleSaveBtn').href = url;
+    
+    mediaBox.innerHTML = `
+        <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
+    
+    const ext = item.name.split('.').pop().toLowerCase();
+    const isStrictMesh = (ext === 'obj');
+
+    document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    if (isStrictMesh) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh">
+                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
+                </div>
+            </div>`;
+        initBabylonMeshScene("babylonAssetCanvas", url, item.name);
+    } else if(['png','jpg','jpeg','webp'].includes(ext) || item.label.toLowerCase().includes('texture')) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh">
+                    <img src="${url}" class="pixelated-render">
+                </div>
+            </div>`;
+    } else if(['mp4','mkv','webm'].includes(ext) || item.label.toLowerCase().includes('video')) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper relative">
+                <div class="aspect-16-9-viewport relative">
+                    <div id="videoCenterOverlay" class="center-play-overlay">
+                        <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                    </div>
+                    <video id="customVideoPlayer" src="${url}" class="w-full h-full object-contain"></video>
+                </div>
+                <div class="custom-control-bar">
+                    <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                    <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                            <i class="fa-solid fa-play"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        initCustomVideoController();
+    } else if(['mp3','wav','ogg'].includes(ext) || item.label.toLowerCase().includes('audio')) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper relative">
+                <div class="aspect-16-9-viewport relative">
+                    <div id="audioCenterOverlay" class="center-play-overlay">
+                        <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                    </div>
+                    <canvas id="audioVisualizerCanvas"></canvas>
+                    <audio id="customAudioPlayer" src="${url}" crossorigin="anonymous" class="hidden"></audio>
+                </div>
+                <div class="custom-control-bar">
+                    <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                    <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                            <i class="fa-solid fa-play"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        initCustomAudioController();
+    } else {
+        try {
+            const r = await fetch(url);
+            const txt = await r.text();
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper h-full">
+                    <div class="aspect-16-9-viewport full-viewport-mesh">
+                        <pre class="text-[10px] font-mono text-zinc-500 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#030305]">${txt.slice(0, 8000)}</pre>
+                    </div>
+                </div>`;
+        } catch {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh text-zinc-800"><i class="fa-solid fa-file-circle-exclamation text-xl"></i></div></div>`;
         }
     }
+}
 
-    function closePreviewContainer(id) {
-        const box = document.getElementById(id);
-        box.style.display = 'none';
-        box.innerHTML = '';
+function interceptDownloadZip(e, encodedUrl) {
+    e.stopPropagation();
+    const url = decodeURIComponent(encodedUrl);
+    window.open(`https://ff-asset-extractor.vercel.app/api/extract?url=${encodeURIComponent(url)}&download_type=zip`, '_blank');
+}
+
+function downloadMasterBulkZip() {
+    if(!activeCache.length) return;
+    const targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
+    window.open(`https://ff-asset-extractor.vercel.app/api/extract?version=${encodeURIComponent(targetVersion)}&download_type=zip&mode=bulk_categorized`, '_blank');
+}
+
+function cleanPreviousMediaTracks() {
+    if (audioAnimationId) cancelAnimationFrame(audioAnimationId);
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    if (babylonEngine) { window.removeEventListener("resize", resizeBabylonViewportMatrix); babylonEngine.dispose(); babylonEngine = null; }
+}
+
+function initBabylonMeshScene(canvasId, modelUrl, filename) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    babylonEngine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+    babylonScene = new BABYLON.Scene(babylonEngine);
+    babylonScene.clearColor = new BABYLON.Color4(0.04, 0.04, 0.06, 1);
+    const camera = new BABYLON.ArcRotateCamera("TacticalCamera", Math.PI / 2, Math.PI / 2.5, 4, BABYLON.Vector3.Zero(), babylonScene);
+    camera.attachControl(canvas, true);
+    camera.wheelPrecision = 45;
+    const atmosphericLight = new BABYLON.HemisphericLight("ambientAtmosphere", new BABYLON.Vector3(0, 1, 0), babylonScene);
+    atmosphericLight.intensity = 0.6;
+    const keyDirectionalLight = new BABYLON.DirectionalLight("studioKeyLight", new BABYLON.Vector3(6, 12, 5), babylonScene);
+    keyDirectionalLight.intensity = 0.9;
+    const structuralGrid = BABYLON.MeshBuilder.CreateGround("workspaceGrid", { width: 14, height: 14, subdivisions: 28 }, babylonScene);
+    const gridMaterial = new BABYLON.StandardMaterial("gridMaterialSet", babylonScene);
+    gridMaterial.wireframe = true;
+    gridMaterial.diffuseColor = new BABYLON.Color3(0.12, 0.12, 0.18);
+    structuralGrid.material = gridMaterial;
+    structuralGrid.position.y = -1.1;
+
+    BABYLON.SceneLoader.ImportMesh("", "", modelUrl, babylonScene, function (meshes) {
+        if (!meshes || meshes.length === 0) return;
+        const premiumMaterial = new BABYLON.StandardMaterial("eliteModelMat", babylonScene);
+        premiumMaterial.diffuseColor = new BABYLON.Color3(0.85, 0.15, 0.2); 
+        premiumMaterial.specularColor = new BABYLON.Color3(1.0, 0.85, 0.0); 
+        premiumMaterial.specularPower = 32;
+        premiumMaterial.backFaceCulling = false;
+        meshes.forEach(mesh => { if(!mesh.material) mesh.material = premiumMaterial; });
+        let min = meshes[0].getBoundingInfo().boundingBox.minimumWorld;
+        let max = meshes[0].getBoundingInfo().boundingBox.maximumWorld;
+        meshes.forEach(mesh => {
+            const bounds = mesh.getBoundingInfo().boundingBox;
+            min = BABYLON.Vector3.Minimize(min, bounds.minimumWorld);
+            max = BABYLON.Vector3.Maximize(max, bounds.maximumWorld);
+        });
+        const computedCenter = min.add(max).scale(0.5);
+        const dimensionsSize = max.subtract(min);
+        const targetScaleFactor = 2.4 / Math.max(dimensionsSize.x, dimensionsSize.y, dimensionsSize.z);
+        meshes.forEach(mesh => {
+            mesh.position.subtractInPlace(computedCenter);
+            mesh.scaling = new BABYLON.Vector3(targetScaleFactor, targetScaleFactor, targetScaleFactor);
+        });
+    }, function() {}, function() {}, ".obj");
+    babylonEngine.runRenderLoop(() => { if (babylonScene) babylonScene.render(); });
+    window.addEventListener("resize", resizeBabylonViewportMatrix, false);
+}
+function resizeBabylonViewportMatrix() { if (babylonEngine) babylonEngine.resize(); }
+
+function initCustomVideoController() {
+    const video = document.getElementById('customVideoPlayer');
+    const playBtn = document.getElementById('videoPlayBtn');
+    const centerOverlay = document.getElementById('videoCenterOverlay');
+    const timeline = document.getElementById('videoTimeline');
+    const timeLabel = document.getElementById('videoTimeLabel');
+    function executeToggleAction() {
+        if(video.ended) { video.currentTime = 0; video.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
+        else if(video.paused) { video.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
+        else { video.pause(); playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-play text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); }
     }
+    playBtn.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
+    centerOverlay.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
+    video.ontimeupdate = () => { if(!video.duration) return; timeline.value = (video.currentTime / video.duration) * 100; timeLabel.innerText = formatTimeMetrics(video.currentTime); };
+    video.onended = () => { playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); };
+    timeline.oninput = () => { video.currentTime = (timeline.value / 100) * video.duration; };
+}
 
-    function interceptDownload(e, url, type) {
-        e.stopPropagation();
-        let targetDownloadUrl = url;
-        if(type === 'zip') {
-            targetDownloadUrl = `https://ff-asset-extractor.vercel.app/api/extract?url=${encodeURIComponent(url)}&download_type=zip`;
+function initCustomAudioController() {
+    const audio = document.getElementById('customAudioPlayer');
+    const playBtn = document.getElementById('audioPlayBtn');
+    const centerOverlay = document.getElementById('audioCenterOverlay');
+    const timeline = document.getElementById('audioTimeline');
+    const timeLabel = document.getElementById('audioTimeLabel');
+    const canvas = document.getElementById('audioVisualizerCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.clientWidth * window.devicePixelRatio;
+    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    function executeToggleAction() {
+        if(!audioCtx) { initAudioContextEngine(audio, canvas, ctx); }
+        if(audio.ended) { audio.currentTime = 0; audio.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
+        else if(audio.paused) { audio.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
+        else { audio.pause(); playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-play text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); }
+    }
+    playBtn.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
+    centerOverlay.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
+    audio.ontimeupdate = () => { if(!audio.duration) return; timeline.value = (audio.currentTime / audio.duration) * 100; timeLabel.innerText = formatTimeMetrics(audio.currentTime); };
+    audio.onended = () => { playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); };
+    timeline.oninput = () => { audio.currentTime = (timeline.value / 100) * audio.duration; };
+}
+
+function initAudioContextEngine(audioElement, canvas, ctx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioSource = audioCtx.createMediaElementSource(audioElement);
+    audioAnalyser = audioCtx.createAnalyser();
+    audioSource.connect(audioAnalyser);
+    audioAnalyser.connect(audioCtx.destination);
+    audioAnalyser.fftSize = 128;
+    const bufferLength = audioAnalyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    const w = canvas.clientWidth; const h = canvas.clientHeight;
+    function drawFullSymmetricWaves() {
+        audioAnimationId = requestAnimationFrame(drawFullSymmetricWaves);
+        audioAnalyser.getByteFrequencyData(dataArray);
+        ctx.fillStyle = '#020204'; ctx.fillRect(0, 0, w, h);
+        const barWidth = w / bufferLength; let x = 0;
+        for(let i = 0; i < bufferLength; i++) {
+            const normalizedVal = dataArray[i] / 255;
+            const barHeight = normalizedVal * h * 0.8;
+            ctx.fillStyle = `rgba(56, 189, 248, ${0.45 + normalizedVal})`;
+            ctx.fillRect(x, (h / 2) - (barHeight / 2), barWidth - 1, barHeight);
+            x += barWidth;
         }
-        window.open(targetDownloadUrl, '_blank');
-        showToastNotification("Download instruction pipeline routed successfully.");
     }
+    drawFullSymmetricWaves();
+}
 
-    // Global Bulk Extraction Routing Workspace Engine
-    btnExtractAllZip.addEventListener('click', () => {
-        if(!activeDataPayload.files.length) return;
-        // Global asset-pipeline category compilation sequence route
-        showToastNotification("Compressing full delta structures context arrays into master categorized ZIP...");
-        const targetGlobalZip = `https://ff-asset-extractor.vercel.app/api/extract?version=${activeDataPayload.version}&download_type=zip&mode=bulk_categorized`;
-        window.open(targetGlobalZip, '_blank');
-    });
+function formatTimeMetrics(secs) {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = Math.floor(secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+}
 
-    btnLogTxt.addEventListener('click', () => {
-        if(!activeDataPayload.files.length) return showToastNotification("Data structure catalog empty.");
-        const textPayload = `Garena Free Fire Update Delta Sheet — Tracking Branch v${activeDataPayload.version}\n` +
-            `Operational Weight Load Context: ${computeByteScale(activeDataPayload.totalSize)}\n` +
-            `========================================================================\n\n` +
-            activeDataPayload.files.map((f, i) => `${i+1}. Package Container Name: ${f.fileName}\nSource CDN URL Address: ${f.url}`).join('\n\n');
-        
-        const blob = new Blob([textPayload], { type: 'text/plain' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `DeltaRegistry-v${activeDataPayload.version}.txt`;
-        link.click();
-        showToastNotification("Update log file successfully compiled and saved.");
-    });
+function updateFilterMenu() {} // Kept structural integrity hook
 
-    function triggerVisualAlert(msg) {
-        errorBox.textContent = msg;
-        errorBox.style.display = 'block';
-    }
-
-    function showToastNotification(msg) {
-        toastNotification.textContent = msg;
-        toastNotification.style.display = 'block';
-        setTimeout(() => toastNotification.style.display = 'none', 3000);
-    }
-
-    function escapeHtml(str) {
-        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-    }
-
-    btnTrigger.addEventListener('click', triggerDeltaSync);
-    initSystemMatrix();
+initSystemMatrix();
 </script>
 </body>
 </html>
