@@ -15,7 +15,6 @@
         .subtitle { font-size: 0.95rem; opacity: 0.8; }
         .card { background: white; border-radius: 16px; box-shadow: 0 8px 30px rgba(52, 152, 219, 0.08); padding: 25px; margin-bottom: 20px; }
         
-        /* Toggle Styling */
         .toggle-container { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--border); }
         .switch-label { font-weight: 600; color: var(--dark); }
         .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
@@ -31,7 +30,7 @@
         .placeholder-box i { color: var(--primary); }
         .input-hint { font-size: 0.85rem; color: #7f8c8d; margin-top: 8px; }
         
-        .btn { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; border: none; padding: 14px; border-radius: 12px; font-size: 1rem; font-weight: 600; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 20px; transition: all 0.2s; }
+        .btn { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; border: none; padding: 14px; border-radius: 12px; font-size: 1rem; font-weight: 600; cursor: pointer; width: 100%; margin-top: 20px; transition: all 0.2s; }
         .btn:hover { opacity: 0.95; transform: translateY(-1px); }
         .btn:disabled { background: #bdc3c7; cursor: not-allowed; transform: none; }
 
@@ -55,7 +54,6 @@
         .loading { display: none; text-align: center; padding: 15px; font-weight: 600; color: var(--primary); }
         .action-btn { background: var(--success); color: white; border: none; padding: 12px; border-radius: 12px; font-size: 0.95rem; font-weight: 600; cursor: pointer; width: 100%; margin-top: 15px; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .no-changes { text-align: center; color: #7f8c8d; padding: 20px; font-style: italic; }
-        
         .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 10px 20px; border-radius: 20px; font-size: 0.85rem; z-index: 1000; display: none; }
     </style>
 </head>
@@ -64,7 +62,7 @@
 <div class="container">
     <header>
         <h1>Mini Update Checker</h1>
-        <p class="subtitle">Extract live asset delta links easily</p>
+        <p class="subtitle">Extract live patch files & update assets instantly</p>
     </header>
 
     <main>
@@ -79,20 +77,20 @@
 
             <div id="manualInputGroup" style="display: none;">
                 <label for="versionInput">Mini-Update Version / URL</label>
-                <input type="text" id="versionInput" placeholder="e.g., 1.123.18 or paste live log fileinfo link" />
-                <p class="input-hint">Enter target patch parameters to cross-examine differences.</p>
+                <input type="text" id="versionInput" placeholder="e.g., 1.123.18 or full fileinfo URL" />
+                <p class="input-hint">Manually input a target build number to compare data sheets.</p>
             </div>
 
             <div id="autoInputGroup">
-                <label>Target Remote Checked Line Version</label>
+                <label>Target Remote Monitored Line Version</label>
                 <div class="placeholder-box">
                     <i class="fas fa-cloud-download-alt"></i>
-                    <span id="autoVersionDisplay">Fetching latest via remote channel...</span>
+                    <span id="autoVersionDisplay">Resolving server-side system connection...</span>
                 </div>
             </div>
 
             <button class="btn" id="checkBtn"><i class="fas fa-search"></i> Check For Target Changes</button>
-            <div id="loading" class="loading"><i class="fas fa-spinner fa-spin"></i> Synchronizing and parsing updates...</div>
+            <div id="loading" class="loading"><i class="fas fa-spinner fa-spin"></i> Synchronizing and parsing update catalogs...</div>
             <div id="error" class="error"></div>
         </div>
 
@@ -104,7 +102,7 @@
             
             <div class="result-container">
                 <div class="result-header">
-                    <span><i class="fas fa-file-alt"></i> Delta Stream File List</span>
+                    <span><i class="fas fa-file-alt"></i> Active Delta Patch Streams</span>
                     <span class="result-count" id="resCount">0 Added</span>
                 </div>
                 <div class="result-content" id="content"></div>
@@ -137,7 +135,6 @@
     const downloadBtn = document.getElementById('downloadBtn');
     const toast = document.getElementById('toast');
 
-    // System mode switching triggers
     modeToggle.addEventListener('change', () => {
         if(modeToggle.checked) {
             autoInputGroup.style.display = 'block';
@@ -148,22 +145,19 @@
         }
     });
 
-    // Auto load latest version string architecture
+    // Safely request parsed remote calculations directly from internal proxy endpoint
     async function loadRemoteVersion() {
         try {
-            const res = await fetch('https://ff-version.vercel.app/update');
+            const res = await fetch('/api/latest-version');
             const data = await res.json();
-            if(data.success && data.remote_version) {
-                // Parse remote version and increment index by 1 (e.g. 1.123.17 -> 1.123.18)
-                let parts = data.remote_version.split('.').map(Number);
-                parts[2] += 1;
-                remoteFetchedVersion = parts.join('.');
+            if(data.success && data.target_version) {
+                remoteFetchedVersion = data.target_version;
                 autoVersionDisplay.textContent = `${remoteFetchedVersion} (Next Target Build)`;
             } else {
-                autoVersionDisplay.textContent = "Error loading dynamic remote endpoint";
+                autoVersionDisplay.textContent = "Unable to process remote stream version configurations.";
             }
         } catch {
-            autoVersionDisplay.textContent = "Failed fallback monitoring connection.";
+            autoVersionDisplay.textContent = "Server configuration synchronization link timed out.";
         }
     }
 
@@ -178,7 +172,7 @@
         resultArea.style.display = 'none';
         
         let targetVersion = modeToggle.checked ? remoteFetchedVersion : versionInput.value.trim();
-        if(!targetVersion) return showErr("Please write or supply valid operational version criteria.");
+        if(!targetVersion) return showErr("Please supply or wait for valid update parameters.");
 
         loading.style.display = 'block';
         checkBtn.disabled = true;
@@ -187,15 +181,15 @@
             const response = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
             const data = await response.json();
             
-            if(!data.success) throw new Error(data.message || "Failed parsing execution cycle.");
+            if(!data.success) throw new Error(data.message || "Execution exception occurred during server analysis.");
 
             currentData = data;
-            resVersion.textContent = `Active Build: v${data.version}`;
+            resVersion.textContent = `Active Checked Version: v${data.version}`;
             resSize.textContent = formatBytes(data.totalSize);
-            resCount.textContent = `${data.files.length} structural changes`;
+            resCount.textContent = `${data.files.length} changes detected`;
 
             if(data.files.length === 0) {
-                content.innerHTML = '<div class="no-changes">Clean alignment. Zero delta file additions identified.</div>';
+                content.innerHTML = '<div class="no-changes">Clean alignment. Zero target changes mapped between these sequential versions.</div>';
             } else {
                 content.innerHTML = data.files.map((f, idx) => `
                     <div class="download-item">
@@ -230,21 +224,21 @@
     checkBtn.addEventListener('click', processUpdateCheck);
     
     downloadBtn.addEventListener('click', () => {
-        if(!currentData.files.length) return showToast("No functional links present.");
-        const textBlobStr = `Free Fire Update Log: v${currentData.version}\n` +
-            `Total Size Context: ${formatBytes(currentData.totalSize)}\n` +
-            `=========================================\n\n` +
+        if(!currentData.files.length) return showToast("Nothing to generate.");
+        const textBlobStr = `Free Fire Update Tracking Log — v${currentData.version}\n` +
+            `Total Weight: ${formatBytes(currentData.totalSize)}\n` +
+            `==================================================\n\n` +
             currentData.files.map((f, i) => `${i+1}. ${f.fileName}\n${f.url}`).join('\n\n');
         
         const blob = new Blob([textBlobStr], { type: 'text/plain' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `FF-Update-${currentData.version}.txt`;
+        a.download = `FF-AssetPatch-${currentData.version}.txt`;
         a.click();
-        showToast("Export process completed!");
+        showToast("Log sheet generated!");
     });
 
-    // Run verification initialization
+    // Run layout validation routines
     loadRemoteVersion();
 </script>
 </body>
