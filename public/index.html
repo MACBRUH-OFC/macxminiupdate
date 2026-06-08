@@ -13,8 +13,11 @@
 <style>
 @font-face { font-family: 'GFF-Bold'; src: url('https://dl.dir.freefiremobile.com/common/web_event/common/fonts/website/GFFLatinW05-Bold.woff') format('woff'); }
 :root { --ff-yellow: #ffde00; --ff-emerald: #00ffa3; --ff-red: #ff3e3e; --ff-cyan: #38bdf8; }
-body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter', sans-serif; overflow-x: hidden; }
-.gff { font-family: 'GFF-Bold', sans-serif; }
+
+/* Apply GFF-Bold dynamically across all document layout structures */
+body, input, button, select, textarea, span, p, h2, pre { font-family: 'GFF-Bold', 'Inter', sans-serif !important; }
+
+body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; }
 
 .brand-strip { width: 100%; height: 60px; background: #000; border-b: 1px solid #111; display: flex; align-items: center; justify-content: center; position: relative; }
 .brand-line { width: 100%; height: 3px; background: var(--ff-yellow); box-shadow: 0 2px 10px rgba(255, 222, 0, 0.3); }
@@ -47,11 +50,11 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 .tab-btn:hover { color: #fff; background: #14141c; }
 .tab-btn.active { background: #1a1a26; color: var(--ff-yellow); box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); }
 
-.btn-mechanical { cursor: pointer; font-family: 'GFF-Bold'; text-transform: uppercase; font-style: italic; display: flex; align-items: center; justify-content: center; border-radius: 14px; gap: 12px; background: var(--ff-yellow); color: #000; box-shadow: 0 5px 0 #bfa600; transition: all 0.1s; user-select: none; }
+.btn-mechanical { cursor: pointer; text-transform: uppercase; font-style: italic; display: flex; align-items: center; justify-content: center; border-radius: 14px; gap: 12px; background: var(--ff-yellow); color: #000; box-shadow: 0 5px 0 #bfa600; transition: all 0.1s; user-select: none; }
 .btn-mechanical:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #bfa600; }
 .btn-mechanical:disabled { background: #222226 !important; color: #55555c !important; box-shadow: 0 5px 0 #141416 !important; cursor: not-allowed; transform: none !important; opacity: 0.8; }
 
-.display-box-nexus { width: 100%; padding: 16px; border: 1px solid #1e1e2b; border-radius: 14px; background: #040406; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 800; font-size: 20px; font-family: 'Inter', sans-serif; letter-spacing: 0.05em; }
+.display-box-nexus { width: 100%; padding: 16px; border: 1px solid #1e1e2b; border-radius: 14px; background: #040406; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }
 .indicator-dot { width: 10px; height: 10px; background: var(--ff-emerald); border-radius: 50%; box-shadow: 0 0 12px var(--ff-emerald); animation: pulseDot 2s infinite; }
 .indicator-dot.offline { background: var(--ff-red); box-shadow: 0 0 12px var(--ff-red); }
 .indicator-dot.neutral { background: var(--ff-cyan); box-shadow: 0 0 12px var(--ff-cyan); }
@@ -62,7 +65,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
     100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 163, 0); }
 }
 
-.input-text-nexus { width: 100%; padding: 16px; border: 1px solid #222230; border-radius: 14px; font-size: 18px; font-weight: 700; background: #040406; color: #fff; text-align: center; outline: none; transition: all 0.2s; font-family: 'Inter', sans-serif; letter-spacing: 0.05em; }
+.input-text-nexus { width: 100%; padding: 16px; border: 1px solid #222230; border-radius: 14px; font-size: 18px; font-weight: 700; background: #040406; color: #fff; text-align: center; outline: none; transition: all 0.2s; letter-spacing: 0.05em; }
 .input-text-nexus:focus { border-color: var(--ff-yellow); background: #07070b; box-shadow: 0 0 15px rgba(255, 222, 0, 0.1); }
 
 .accordion-tray { background: #050508; border-top: 1px solid #12121a; padding: 10px 14px; display: none; }
@@ -100,7 +103,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
 <div class="brand-line"></div>
 
 <div class="flex flex-col items-center pt-6 pb-4 px-4 select-none">
-    <div class="text-center gff tracking-tight">
+    <div class="text-center tracking-tight">
         <span class="text-[34px] md:text-[44px] font-black italic block leading-[0.8] text-white">MINIUPDATE</span>
         <span class="text-[34px] md:text-[44px] font-black italic block text-[#ffde00] leading-[0.9]">CHECKER</span>
     </div>
@@ -110,7 +113,7 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
     <div class="uniform-panel panel-1">
         <div class="panel-body justify-start space-y-5">
             <div>
-                <h2 class="text-xs font-black text-white uppercase tracking-wider mb-2 gff">Mode Selector</h2>
+                <h2 class="text-xs font-black text-white uppercase tracking-wider mb-2">Mode Selector</h2>
                 <div class="tab-row" id="pipelineTabs">
                     <div class="tab-btn active" data-mode="auto"><i class="fa-solid fa-radar text-[11px]"></i>Auto Radar</div>
                     <div class="tab-btn" data-mode="manual"><i class="fa-solid fa-sliders text-[11px]"></i>Manual Lookup</div>
@@ -139,10 +142,10 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
             <div class="bg-[#0b0b10] border border-zinc-900 rounded-xl p-3 flex items-center gap-3 flex-shrink-0 min-w-0">
                 <div id="statusIcon" class="text-zinc-600 flex-shrink-0"><i class="fa-solid fa-terminal text-xs"></i></div>
                 <div class="flex-1 min-w-0 text-left">
-                    <span id="statusText" class="block text-[8px] font-black text-zinc-500 uppercase gff">System Status</span>
+                    <span id="statusText" class="block text-[8px] font-black text-zinc-500 uppercase">System Status</span>
                     <p id="statusDescText" class="text-[10px] text-zinc-400 truncate">Ready to scan live servers channels.</p>
                 </div>
-                <div id="statusBadge" class="text-[9px] gff px-2 py-0.5 bg-black rounded border border-zinc-900 text-zinc-500 flex-shrink-0">READY</div>
+                <div id="statusBadge" class="text-[9px] px-2 py-0.5 bg-black rounded border border-zinc-900 text-zinc-500 flex-shrink-0">READY</div>
             </div>
         </div>
     </div>
@@ -151,11 +154,11 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
         <div class="panel-body">
             <div class="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3 flex-shrink-0 min-w-0">
                 <div class="min-w-0 text-left mr-2">
-                    <h2 class="text-xs font-black text-white uppercase tracking-wider gff">Discovered Packages</h2>
+                    <h2 class="text-xs font-black text-white uppercase tracking-wider">Discovered Packages</h2>
                     <p id="cacheCounterText" class="text-[10px] text-zinc-500 truncate">0 files found</p>
                 </div>
                 <div class="flex items-center gap-2 hidden" id="listActions">
-                    <button onclick="downloadMasterBulkZip()" title="Download All Files as a Categorized ZIP" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-yellow-500 hover:text-white hover:bg-yellow-500 hover:border-yellow-500 transition-all shadow-md flex-shrink-0">
+                    <button onclick="downloadMasterBulkZip()" title="Download All Files as a ZIP" class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-yellow-500 hover:text-white hover:bg-yellow-500 hover:border-yellow-500 transition-all shadow-md flex-shrink-0">
                         <i class="fa-solid fa-file-zipper text-xs"></i>
                     </button>
                 </div>
@@ -163,12 +166,12 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
             <div class="scrollable-content-box flex-1 flex flex-col">
                 <div id="listEmptyState" class="flex-1 flex flex-col items-center justify-center text-zinc-700 p-8 text-center">
                     <i class="fa-solid fa-folder-tree text-2xl mb-3 text-zinc-800"></i>
-                    <span class="text-[9px] font-bold gff uppercase tracking-widest text-zinc-600 block">Waiting Status</span>
+                    <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600 block">Waiting Status</span>
                     <p class="text-[10px] text-zinc-500 max-w-[180px] mt-1 leading-normal">Run update checking parameter scanner to find newly updated package patches.</p>
                 </div>
                 <div id="listLoadingState" class="hidden flex-1 flex flex-col items-center justify-center text-zinc-500 p-8 text-center">
                     <i class="fa-solid fa-circle-notch fa-spin text-yellow-500 text-xl mb-3"></i>
-                    <span class="text-[10px] font-bold gff uppercase tracking-wider text-zinc-400">Analyzing update patch packages...</span>
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Analyzing update patch packages...</span>
                 </div>
                 <div id="fileList" class="hidden flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-w-0"></div>
             </div>
@@ -178,20 +181,20 @@ body { background: #030305; color: #fff; min-height: 100vh; font-family: 'Inter'
     <div id="previewTargetWorkspace" class="uniform-panel panel-3">
         <div class="panel-body">
             <div class="mb-4 border-b border-zinc-900 pb-3 flex-shrink-0">
-                <h2 class="text-xs font-black text-white uppercase tracking-wider gff">Live Asset Viewport</h2>
+                <h2 class="text-xs font-black text-white uppercase tracking-wider">Live Asset Viewport</h2>
                 <p class="text-[10px] text-zinc-500">Real-time asset contents viewing window.</p>
             </div>
             <div class="scrollable-content-box bg-black flex flex-col p-2">
                 <div id="previewFallback" class="flex-1 flex flex-col items-center justify-center text-zinc-800 p-4">
                     <i class="fa-solid fa-eye text-xl mb-2"></i>
-                    <span class="text-[9px] font-bold gff uppercase tracking-wide">Select an Extracted File to View</span>
+                    <span class="text-[9px] font-bold uppercase tracking-wide">Select an Extracted File to View</span>
                 </div>
                 <div id="previewContent" class="hidden flex-1 flex flex-col min-w-0 overflow-hidden justify-between h-full">
                     <div id="mediaBox" class="w-full flex flex-col min-h-0 flex-1 justify-center h-full relative"></div>
                     <div class="mt-3 bg-[#0d0d14] p-2 rounded-xl border border-zinc-900 flex items-center justify-between gap-3 flex-shrink-0 min-w-0">
                         <div class="min-w-0 flex-1 text-left px-1">
                             <p id="mediaTitle" class="text-[11px] font-bold text-zinc-300 truncate">Asset File</p>
-                            <p id="mediaTypeLabel" class="text-[8px] font-black text-zinc-600 uppercase gff tracking-wider">Type</p>
+                            <p id="mediaTypeLabel" class="text-[8px] font-black text-zinc-600 uppercase tracking-wider">Type</p>
                         </div>
                         <a id="singleSaveBtn" href="#" download class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-yellow-500 transition-all flex-shrink-0">
                             <i class="fa-solid fa-download text-xs"></i>
@@ -248,7 +251,7 @@ async function initSystemMatrix() {
         txtAutoLabel.textContent = "Checking live channels...";
         radarIndicatorDot.className = "indicator-dot neutral";
 
-        const response = await fetch('/api/latest-version');
+        const response = await fetch('/api?action=latest-version');
         const data = await response.json();
 
         if (data.success && data.target_version) {
@@ -299,7 +302,7 @@ extractBtn.onclick = async () => {
     document.getElementById('listActions').classList.add('hidden');
 
     try {
-        const res = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
+        const res = await fetch(`/api?action=update&version=${encodeURIComponent(targetVersion)}`);
         const data = await res.json();
         if(!data.success) throw new Error(data.message || "Failed parsing target channels.");
 
@@ -392,6 +395,18 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         return;
     }
 
+    // Collapse any currently open accordion folders
+    document.querySelectorAll('.accordion-tray').forEach(otherTray => {
+        if (otherTray.id !== `tray-${index}`) {
+            otherTray.style.display = "none";
+            const otherIdx = otherTray.id.replace('tray-', '');
+            const otherArrow = document.getElementById(`arrow-${otherIdx}`);
+            if (otherArrow) {
+                otherArrow.style.transform = "rotate(0deg)";
+            }
+        }
+    });
+
     tray.style.display = "block";
     arrow.style.transform = "rotate(185deg)";
 
@@ -405,7 +420,8 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
 
-        const response = await fetch('/api/process', {
+        // Fetch through unified query endpoint mapping
+        const response = await fetch('/api?action=process', {
             method: 'POST',
             body: formData
         });
@@ -437,11 +453,11 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                 }, subRow);
             };
 
+            // Removed the Cached Session text tag label
             subRow.innerHTML = `
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
                     <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
                 </span>
-                <span class="text-[8px] text-zinc-600 font-bold uppercase tracking-wider flex-shrink-0 ml-auto mr-1">CACHED SESSION</span>
             `;
             sublist.appendChild(subRow);
         });
@@ -535,7 +551,6 @@ async function selectFile(item, element) {
 
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Category Identification Flags
     const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite');
     const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video');
     const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio');
@@ -550,7 +565,7 @@ async function selectFile(item, element) {
             </div>`;
         initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name);
     } 
-    else if(isImage) {
+    else if (isImage) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -558,7 +573,7 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
     } 
-    else if(isVideo) {
+    else if (isVideo) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -579,7 +594,7 @@ async function selectFile(item, element) {
             </div>`;
         initCustomVideoController();
     } 
-    else if(isAudio) {
+    else if (isAudio) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -601,17 +616,16 @@ async function selectFile(item, element) {
             </div>`;
         initCustomAudioController();
     } 
-    else if(isBinary) {
-        // Hexadecimal reader view for raw files like .bin, .bytes, .dat structures
+    else if (isBinary) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
                     <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
-                        <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase gff border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
+                        <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
                             <span>Hexadecimal representation (First 4KB)</span>
                             <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
                         </div>
-                        <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-400/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
+                        <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
                     </div>
                 </div>
             </div>`;
@@ -625,9 +639,8 @@ async function selectFile(item, element) {
         } catch (e) {
             showFallbackError(e.message);
         }
-    }
+    } 
     else {
-        // Standard text, configs, JSON, XML markup viewers
         try {
             let processedTextString = "";
             if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
