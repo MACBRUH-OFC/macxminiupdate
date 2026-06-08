@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini Update Checker - Free Fire</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --primary: #3498db; --primary-light: #e1f5fe; --secondary: #2980b9; --light: #f8fbfe; --dark: #2c3e50; --text: #34495e; --border: #d6e4f0; --success: #27ae60; --warning: #f39c12; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
+        body { background-color: var(--light); color: var(--text); line-height: 1.6; min-height: 100vh; padding: 30px 20px; }
+        .container { max-width: 750px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 25px; }
+        h1 { font-size: 2rem; color: var(--dark); margin-bottom: 5px; }
+        .subtitle { font-size: 0.95rem; opacity: 0.8; }
+        .card { background: white; border-radius: 16px; box-shadow: 0 8px 30px rgba(52, 152, 219, 0.08); padding: 25px; margin-bottom: 20px; }
+        
+        /* Toggle Styling */
+        .toggle-container { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--border); }
+        .switch-label { font-weight: 600; color: var(--dark); }
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .3s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--primary); }
+        input:checked + .slider:before { transform: translateX(24px); }
+
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: var(--dark); }
+        input[type="text"], .placeholder-box { width: 100%; padding: 14px 15px; border: 2px solid var(--border); border-radius: 12px; font-size: 0.95rem; background: var(--light); }
+        .placeholder-box { display: flex; align-items: center; gap: 10px; color: var(--dark); font-weight: 600; border-style: dashed; }
+        .placeholder-box i { color: var(--primary); }
+        .input-hint { font-size: 0.85rem; color: #7f8c8d; margin-top: 8px; }
+        
+        .btn { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; border: none; padding: 14px; border-radius: 12px; font-size: 1rem; font-weight: 600; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 20px; transition: all 0.2s; }
+        .btn:hover { opacity: 0.95; transform: translateY(-1px); }
+        .btn:disabled { background: #bdc3c7; cursor: not-allowed; transform: none; }
+
+        .version-info { display: flex; gap: 12px; margin-bottom: 15px; }
+        .badge { background: white; padding: 10px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; border: 1px solid var(--border); flex: 1; display: flex; align-items: center; gap: 8px; }
+        .badge i { color: var(--primary); }
+        .badge.size i { color: var(--warning); }
+
+        .result-container { border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: white; }
+        .result-header { background: var(--dark); color: white; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; font-weight: 600; }
+        .result-count { background: var(--primary); padding: 3px 10px; border-radius: 20px; font-size: 0.8rem; }
+        .result-content { max-height: 400px; overflow-y: auto; padding: 10px; }
+        
+        .download-item { padding: 10px; border-bottom: 1px solid var(--light); display: flex; flex-direction: column; gap: 4px; }
+        .download-item:last-child { border: none; }
+        .file-meta { display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600; color: var(--dark); }
+        .download-link { color: var(--primary); text-decoration: none; font-size: 0.75rem; word-break: break-all; font-family: monospace; }
+        .download-link:hover { text-decoration: underline; }
+        
+        .error { color: #e74c3c; background: #fdecea; padding: 14px; border-radius: 12px; font-size: 0.9rem; margin-top: 15px; display: none; border-left: 4px solid #e74c3c; }
+        .loading { display: none; text-align: center; padding: 15px; font-weight: 600; color: var(--primary); }
+        .action-btn { background: var(--success); color: white; border: none; padding: 12px; border-radius: 12px; font-size: 0.95rem; font-weight: 600; cursor: pointer; width: 100%; margin-top: 15px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .no-changes { text-align: center; color: #7f8c8d; padding: 20px; font-style: italic; }
+        
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 10px 20px; border-radius: 20px; font-size: 0.85rem; z-index: 1000; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Mini Update Checker</h1>
+        <p class="subtitle">Extract live asset delta links easily</p>
+    </header>
+
+    <main>
+        <div class="card">
+            <div class="toggle-container">
+                <span class="switch-label"><i class="fas fa-robot"></i> Automatic Remote API Mode</span>
+                <label class="switch">
+                    <input type="checkbox" id="modeToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div id="manualInputGroup" style="display: none;">
+                <label for="versionInput">Mini-Update Version / URL</label>
+                <input type="text" id="versionInput" placeholder="e.g., 1.123.18 or paste live log fileinfo link" />
+                <p class="input-hint">Enter target patch parameters to cross-examine differences.</p>
+            </div>
+
+            <div id="autoInputGroup">
+                <label>Target Remote Checked Line Version</label>
+                <div class="placeholder-box">
+                    <i class="fas fa-cloud-download-alt"></i>
+                    <span id="autoVersionDisplay">Fetching latest via remote channel...</span>
+                </div>
+            </div>
+
+            <button class="btn" id="checkBtn"><i class="fas fa-search"></i> Check For Target Changes</button>
+            <div id="loading" class="loading"><i class="fas fa-spinner fa-spin"></i> Synchronizing and parsing updates...</div>
+            <div id="error" class="error"></div>
+        </div>
+
+        <div id="resultArea" style="display: none;">
+            <div class="version-info">
+                <div class="badge"><i class="fas fa-code-branch"></i> <span id="resVersion">v0.0.0</span></div>
+                <div class="badge size"><i class="fas fa-database"></i> <span id="resSize">0 MB</span></div>
+            </div>
+            
+            <div class="result-container">
+                <div class="result-header">
+                    <span><i class="fas fa-file-alt"></i> Delta Stream File List</span>
+                    <span class="result-count" id="resCount">0 Added</span>
+                </div>
+                <div class="result-content" id="content"></div>
+            </div>
+
+            <button class="action-btn" id="downloadBtn"><i class="fas fa-download"></i> Export Document Content as TXT</button>
+        </div>
+    </main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+    let currentData = { version: '', files: [], totalSize: 0 };
+    let remoteFetchedVersion = "";
+
+    const modeToggle = document.getElementById('modeToggle');
+    const manualInputGroup = document.getElementById('manualInputGroup');
+    const autoInputGroup = document.getElementById('autoInputGroup');
+    const autoVersionDisplay = document.getElementById('autoVersionDisplay');
+    const versionInput = document.getElementById('versionInput');
+    const checkBtn = document.getElementById('checkBtn');
+    const loading = document.getElementById('loading');
+    const error = document.getElementById('error');
+    const resultArea = document.getElementById('resultArea');
+    const content = document.getElementById('content');
+    const resVersion = document.getElementById('resVersion');
+    const resSize = document.getElementById('resSize');
+    const resCount = document.getElementById('resCount');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const toast = document.getElementById('toast');
+
+    // System mode switching triggers
+    modeToggle.addEventListener('change', () => {
+        if(modeToggle.checked) {
+            autoInputGroup.style.display = 'block';
+            manualInputGroup.style.display = 'none';
+        } else {
+            autoInputGroup.style.display = 'none';
+            manualInputGroup.style.display = 'block';
+        }
+    });
+
+    // Auto load latest version string architecture
+    async function loadRemoteVersion() {
+        try {
+            const res = await fetch('https://ff-version.vercel.app/update');
+            const data = await res.json();
+            if(data.success && data.remote_version) {
+                // Parse remote version and increment index by 1 (e.g. 1.123.17 -> 1.123.18)
+                let parts = data.remote_version.split('.').map(Number);
+                parts[2] += 1;
+                remoteFetchedVersion = parts.join('.');
+                autoVersionDisplay.textContent = `${remoteFetchedVersion} (Next Target Build)`;
+            } else {
+                autoVersionDisplay.textContent = "Error loading dynamic remote endpoint";
+            }
+        } catch {
+            autoVersionDisplay.textContent = "Failed fallback monitoring connection.";
+        }
+    }
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + ['Bytes', 'KB', 'MB', 'GB'][i];
+    }
+
+    async function processUpdateCheck() {
+        error.style.display = 'none';
+        resultArea.style.display = 'none';
+        
+        let targetVersion = modeToggle.checked ? remoteFetchedVersion : versionInput.value.trim();
+        if(!targetVersion) return showErr("Please write or supply valid operational version criteria.");
+
+        loading.style.display = 'block';
+        checkBtn.disabled = true;
+
+        try {
+            const response = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
+            const data = await response.json();
+            
+            if(!data.success) throw new Error(data.message || "Failed parsing execution cycle.");
+
+            currentData = data;
+            resVersion.textContent = `Active Build: v${data.version}`;
+            resSize.textContent = formatBytes(data.totalSize);
+            resCount.textContent = `${data.files.length} structural changes`;
+
+            if(data.files.length === 0) {
+                content.innerHTML = '<div class="no-changes">Clean alignment. Zero delta file additions identified.</div>';
+            } else {
+                content.innerHTML = data.files.map((f, idx) => `
+                    <div class="download-item">
+                        <div class="file-meta">
+                            <span>${idx + 1}. ${f.fileName}</span>
+                            <span>${formatBytes(f.size)}</span>
+                        </div>
+                        <a href="${f.url}" target="_blank" class="download-link">${f.url}</a>
+                    </div>
+                `).join('');
+            }
+            resultArea.style.display = 'block';
+        } catch (e) {
+            showErr(e.message);
+        } finally {
+            loading.style.display = 'none';
+            checkBtn.disabled = false;
+        }
+    }
+
+    function showErr(msg) {
+        error.textContent = msg;
+        error.style.display = 'block';
+    }
+
+    function showToast(msg) {
+        toast.textContent = msg;
+        toast.style.display = 'block';
+        setTimeout(() => toast.style.display = 'none', 2500);
+    }
+
+    checkBtn.addEventListener('click', processUpdateCheck);
+    
+    downloadBtn.addEventListener('click', () => {
+        if(!currentData.files.length) return showToast("No functional links present.");
+        const textBlobStr = `Free Fire Update Log: v${currentData.version}\n` +
+            `Total Size Context: ${formatBytes(currentData.totalSize)}\n` +
+            `=========================================\n\n` +
+            currentData.files.map((f, i) => `${i+1}. ${f.fileName}\n${f.url}`).join('\n\n');
+        
+        const blob = new Blob([textBlobStr], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `FF-Update-${currentData.version}.txt`;
+        a.click();
+        showToast("Export process completed!");
+    });
+
+    // Run verification initialization
+    loadRemoteVersion();
+</script>
+</body>
+</html>
