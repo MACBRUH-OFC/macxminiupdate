@@ -14,7 +14,7 @@ BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract/bundle"
 
-# Backwards compatible RAM cache fallback
+# Local Persistent Session Cache Map fallback
 MEMORY_ASSET_CACHE = {}
 
 def encode_token(remote_url, filename, content_type):
@@ -65,16 +65,7 @@ def get_file_info_data(version):
         pass
     return None, None
 
-@app.route('/')
-def home():
-    try:
-        with open('index.html', 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        return jsonify({"success": False, "message": "index.html template missing"}), 404
-
-@app.route('/api/latest-version', methods=['GET'])
-def get_latest_calculated_version():
+def latest_version_logic():
     try:
         res = requests.get(VERSION_API, timeout=5)
         data = res.json()
@@ -88,8 +79,7 @@ def get_latest_calculated_version():
         return jsonify({"success": False, "message": str(e)}), 500
     return jsonify({"success": False, "message": "Failed response lookup."}), 500
 
-@app.route('/api/update', methods=['GET'])
-def check_update():
+def check_update_logic():
     input_val = request.args.get('version', '').strip()
     if not input_val:
         return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
@@ -171,8 +161,7 @@ def check_update():
         "files": file_infos
     })
 
-@app.route('/api/process', methods=['POST'])
-def process_file():
+def process_file_logic():
     if 'file' not in request.files:
         return jsonify({"success": False, "message": "No file uploaded"}), 400
 
@@ -193,7 +182,7 @@ def process_file():
 
         assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
 
-        # Map each extracted component dynamically to stateless tokens
+        # Process each extracted component to build safe base64-encoded stream routes
         for asset in assets_list:
             remote_preview_url = asset.get("preview_url") or asset.get("url")
             if not remote_preview_url:
@@ -201,7 +190,6 @@ def process_file():
 
             filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
             
-            # Match standard mime-types
             detected_content_type = 'application/octet-stream'
             if filename_str.endswith('.json'):
                 detected_content_type = 'application/json'
@@ -214,10 +202,10 @@ def process_file():
             elif filename_str.endswith('.mp4'):
                 detected_content_type = 'video/mp4'
 
-            # Build stateless token to allow persistent routing downloads across any infrastructure
             local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type)
 
-            local_proxy_route = f"/api/stream-cache/{local_cache_token}"
+            # Map streams to /api endpoint using safe parameter flags
+            local_proxy_route = f"/api?action=stream&token={local_cache_token}"
             if "preview_url" in asset: asset["preview_url"] = local_proxy_route
             if "url" in asset: asset["url"] = local_proxy_route
 
@@ -226,9 +214,10 @@ def process_file():
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
 
-@app.route('/api/stream-cache/<token>', methods=['GET'])
-def stream_cached_asset_layer(token):
-    # 1. Attempt stateless decoding from token properties
+def stream_cache_logic(token):
+    if not token:
+        return "Missing token query parameter", 400
+
     decoded = decode_token(token)
     if decoded:
         remote_url = decoded["url"]
@@ -244,16 +233,16 @@ def stream_cached_asset_layer(token):
                 response.headers["Access-Control-Allow-Origin"] = "*"
                 return response
             else:
-                return f"Remote host extraction responded with status: {res.status_code}", res.status_code
+                return f"Extraction host responded with status code: {res.status_code}", res.status_code
         except Exception as e:
             return f"Remote connection gateway failure: {str(e)}", 502
 
-    # 2. Stateful fallback to local RAM cache
+    # Stateful local RAM fallback logic
     global MEMORY_ASSET_CACHE
     cached_item = MEMORY_ASSET_CACHE.get(token)
 
     if not cached_item:
-        return "Asset Token Stream Key Expired, invalid or no longer cached in memory.", 404
+        return "Expired or invalid stream token payload.", 404
 
     mime_type = cached_item["content_type"]
     filename_lower = cached_item["filename"].lower()
@@ -279,6 +268,45 @@ def stream_cached_asset_layer(token):
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+
+# Unified Routing Matrix to ensure complete stability across serverless environments
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/api', methods=['GET', 'POST'])
+def handle_all_requests():
+    action = request.args.get('action')
+    
+    # Check if there's no query action but a relative sub-path is sent
+    if not action:
+        path = request.path.rstrip('/')
+        if path == '/api/process' or path == '/process':
+            return process_file_logic()
+        elif path == '/api/latest-version' or path == '/latest-version':
+            return latest_version_logic()
+        elif path == '/api/update' or path == '/update':
+            return check_update_logic()
+        elif path.startswith('/api/stream-cache/') or path.startswith('/stream-cache/'):
+            token = path.split('/')[-1]
+            return stream_cache_logic(token)
+        
+        # Render local landing index template for basic requests
+        if request.method == 'GET' and (path == '' or path == '/api'):
+            try:
+                with open('index.html', 'r', encoding='utf-8') as f:
+                    return f.read()
+            except FileNotFoundError:
+                return jsonify({"success": False, "message": "index.html template missing"}), 404
+
+    # Routing based on request parameters
+    if action == 'latest-version':
+        return latest_version_logic()
+    elif action == 'update':
+        return check_update_logic()
+    elif action == 'process':
+        return process_file_logic()
+    elif action == 'stream':
+        return stream_cache_logic(request.args.get('token'))
+
+    return jsonify({"success": False, "message": f"Action parameter '{action}' is unmapped."}), 404
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
