@@ -384,16 +384,13 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     if (sublist.children.length > 0) return;
 
     try {
-        // 1. Fetch the remote bundle file into memory as a blob
         const assetResponse = await fetch(url);
         if (!assetResponse.ok) throw new Error("Failed downloading package bundle");
         const assetBlob = await assetResponse.blob();
 
-        // 2. Wrap file payload securely into a standard multipart form structure
         const formData = new FormData();
         formData.append('file', assetBlob, fileName);
 
-        // 3. Post data payloads straight through to the local server extraction process
         const response = await fetch('/api/process', {
             method: 'POST',
             body: formData
@@ -401,21 +398,27 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         const extractedData = await response.json();
         loader.style.display = "none";
 
-        if (!response.ok || !extractedData.success || !extractedData.assets || extractedData.assets.length === 0) {
+        // Removed strict validation blocks to ensure any type parsing is rendered cleanly
+        let targets = extractedData.assets || extractedData.files || [];
+        if (!response.ok || targets.length === 0) {
             sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1 text-center">No previewable asset components extracted.</div>`;
             return;
         }
 
-        extractedData.assets.forEach((asset) => {
+        targets.forEach((asset) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 p-1.5 rounded cursor-pointer text-left";
             subRow.onclick = (e) => {
                 e.stopPropagation();
-                selectFile({ name: asset.name, label: asset.type, preview_url: asset.preview_url }, subRow);
+                selectFile({ name: asset.name || asset.fileName, label: asset.type || asset.label || "Asset File", preview_url: asset.preview_url || asset.url }, subRow);
             };
+            
+            let displayName = asset.name || asset.fileName || "unnamed_asset";
+            let rawType = asset.type || asset.label || "Unknown";
+            
             subRow.innerHTML = `
                 <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
-                    <i class="fa-solid ${getIcon(asset.type)} opacity-60"></i> ${asset.name}
+                    <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
                 </span>
                 <span class="text-[8px] text-zinc-600 font-bold uppercase">${asset.size ? computeByteScale(asset.size) : 'Stream Asset'}</span>
             `;
@@ -427,13 +430,23 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     }
 }
 
-function getIcon(label) {
+function getIcon(label, filename = "") {
     const l = label.toLowerCase();
-    if(l.includes('texture') || l.includes('image')) return 'fa-image text-yellow-500';
-    if(l.includes('audio')) return 'fa-volume-high text-cyan-400';
-    if(l.includes('mesh')) return 'fa-cube text-purple-400';
-    if(l.includes('video')) return 'fa-play-circle text-red-500';
-    if(l.includes('json')) return 'fa-file-lines text-emerald-400';
+    const ext = filename.split('.').pop().toLowerCase();
+    
+    // Exact mapping for all 12 requested categories
+    if(l.includes('texture') || ext === 'png' && !l.includes('sprite')) return 'fa-image text-yellow-500';
+    if(l.includes('spriteatlas') || ext === 'atlas' || filename.includes('.atlas.txt')) return 'fa-boxes-stacked text-amber-400';
+    if(l.includes('sprite') || ext === 'png') return 'fa-file-image text-orange-400';
+    if(l.includes('audio') || ['ogg','wav','mp3'].includes(ext)) return 'fa-volume-high text-cyan-400';
+    if(l.includes('video') || ['mp4','mkv','webm'].includes(ext)) return 'fa-play-circle text-red-500';
+    if(l.includes('mesh') || ext === 'obj') return 'fa-cube text-purple-400';
+    if(l.includes('gameobject')) return 'fa-sitemap text-blue-400';
+    if(l.includes('monobehaviour') || l.includes('scriptableobject')) return 'fa-gear text-emerald-400';
+    if(l.includes('material') || l.includes('shader')) return 'fa-wand-magic-sparkles text-pink-400';
+    if(l.includes('animation') || l.includes('animator')) return 'fa-person-running text-indigo-400';
+    if(l.includes('font') || ['ttf','otf'].includes(ext)) return 'fa-font text-teal-400';
+    if(l.includes('text') || ['txt','json','xml'].includes(ext)) return 'fa-file-lines text-zinc-400';
     return 'fa-file-code text-zinc-500';
 }
 
@@ -457,11 +470,12 @@ async function selectFile(item, element) {
         <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
 
     const ext = item.name.split('.').pop().toLowerCase();
-    const isStrictMesh = (ext === 'obj');
-
+    const lLabel = item.label.toLowerCase();
+    
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    if (isStrictMesh) {
+    // Interactive 3D Modeler Pipeline
+    if (ext === 'obj' || lLabel.includes('mesh')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -469,14 +483,18 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initBabylonMeshScene("babylonAssetCanvas", url, item.name);
-    } else if(['png','jpg','jpeg','webp'].includes(ext) || item.label.toLowerCase().includes('texture')) {
+    } 
+    // Image, Sprite & Texture Pipelines
+    else if(['png','jpg','jpeg','webp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
                     <img src="${url}" class="pixelated-render">
                 </div>
             </div>`;
-    } else if(['mp4','mkv','webm'].includes(ext) || item.label.toLowerCase().includes('video')) {
+    } 
+    // High-Performance Media Player Pipelines
+    else if(['mp4','mkv','webm'].includes(ext) || lLabel.includes('video')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -496,7 +514,7 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initCustomVideoController();
-    } else if(['mp3','wav','ogg'].includes(ext) || item.label.toLowerCase().includes('audio')) {
+    } else if(['mp3','wav','ogg'].includes(ext) || lLabel.includes('audio')) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
                 <div class="aspect-16-9-viewport relative">
@@ -517,14 +535,16 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         initCustomAudioController();
-    } else {
+    } 
+    // Fallback Interface Loader for Text, Blueprints, Configurations, Scripts, Hierarchy Nodes & Fonts
+    else {
         try {
             const r = await fetch(url);
             const txt = await r.text();
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
-                        <pre class="text-[10px] font-mono text-zinc-500 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#030305]">${txt.slice(0, 8000)}</pre>
+                        <pre class="text-[10px] font-mono text-zinc-500 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#030305]">${txt.slice(0, 16000)}</pre>
                     </div>
                 </div>`;
         } catch {
