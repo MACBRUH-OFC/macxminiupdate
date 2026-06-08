@@ -98,6 +98,42 @@ def get_extracted_files(file_id, new_text, active_version):
         print(f"Failed to extract bundle {file_id}: {e}")
     return []
 
+def find_previous_itemhotfix_content(active_version):
+    parts = active_version.split('.')
+    if len(parts) != 3:
+        return ""
+    
+    major, middle, minor = parts[0], parts[1], int(parts[2])
+    
+    # Trace back sequentially to version index 1 to locate the preceding build with itemhotfix [2]
+    for m_val in range(minor - 1, 0, -1):
+        prev_ver = f"{major}.{middle}.{m_val}"
+        prev_text, _ = get_file_info_data(prev_ver)
+        if not prev_text:
+            continue
+            
+        prev_itemhotfix_id = None
+        for line in prev_text.splitlines():
+            if not line.strip(): continue
+            p_parts = line.split(',')
+            if len(p_parts) >= 5:
+                fid = p_parts[0].strip()
+                if "config/itemhotfix" in fid.lower():
+                    prev_itemhotfix_id = fid
+                    break
+        
+        if prev_itemhotfix_id:
+            prev_files = get_extracted_files(prev_itemhotfix_id, prev_text, prev_ver)
+            for f in prev_files:
+                fname = f.get("name", "") or f.get("fileName", "")
+                if "itemhotfix.txt" in fname.lower():
+                    b64_data = f.get("data", "")
+                    if b64_data:
+                        return base64.b64decode(b64_data).decode('utf-8', errors='ignore')
+            break
+            
+    return ""
+
 def extract_new_game_items(active_version, new_text):
     itemhotfix_id = None
     lochotfix_id = None
@@ -128,6 +164,21 @@ def extract_new_game_items(active_version, new_text):
     if not itemhotfix_content:
         return []
 
+    # Get the older itemhotfix data to isolate only the current unique additions [2]
+    previous_itemhotfix_content = find_previous_itemhotfix_content(active_version)
+    
+    previous_item_ids = set()
+    if previous_itemhotfix_content:
+        p_lines = previous_itemhotfix_content.splitlines()
+        if len(p_lines) > 2:
+            for pl in p_lines[2:]:
+                if not pl.strip(): continue
+                p_parts = pl.split(',')
+                if len(p_parts) > 0:
+                    pid = p_parts[0].strip()
+                    if pid.isdigit():
+                        previous_item_ids.add(pid)
+
     lochotfix_content = ""
     if lochotfix_id:
         lochotfix_files = get_extracted_files(lochotfix_id, new_text, active_version)
@@ -154,6 +205,10 @@ def extract_new_game_items(active_version, new_text):
             if len(parts) >= 8:
                 item_id = parts[0].strip()
                 if not item_id or not item_id.isdigit():
+                    continue
+                
+                # Filter out historical item IDs
+                if item_id in previous_item_ids:
                     continue
                 
                 text_id = parts[7].strip() if parts[7].strip() else ""
@@ -259,7 +314,6 @@ def check_update_logic():
         if not new_text:
             return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
 
-    # Calculate and fetch up to 6 previous history versions for differential comparisons
     prev_versions = []
     current_temp = active_version
     for _ in range(6):
@@ -317,7 +371,6 @@ def check_update_logic():
         download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
         file_name = file_id.split('/')[-1]
 
-        # Generate custom local proxy secure streaming tokens to obscure Tata CDN and third-party APIs
         token = encode_token(download_url, file_name, 'application/octet-stream')
         proxy_url = f"/api?action=stream&token={token}"
 
@@ -343,84 +396,108 @@ def check_update_logic():
         "new_items": new_items
     })
 
-def process_file_logic():
-    if 'file' not in request.files:
-        return jsonify({"success": False, "message": "No file uploaded"}), 400
+def handle_extractor_response(response):
+    if not response.ok:
+        try:
+            err_data = response.json()
+        except:
+            err_data = {"error": response.text}
+        return jsonify(err_data), response.status_code
 
-    uploaded_file = request.files['file']
-    if uploaded_file.filename == '':
-        return jsonify({"success": False, "message": "Empty filename header sent"}), 400
+    extractor_data = response.json()
+    assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
 
-    bundle_url = request.form.get('bundle_url', '')
+    for asset in assets_list:
+        remote_preview_url = asset.get("preview_url") or asset.get("url")
+        if not remote_preview_url:
+            continue
 
-    files = {
-        'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
-    }
-    data = {
-        'bundle_url': bundle_url
-    }
+        if remote_preview_url.startswith('/'):
+            remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
 
-    try:
-        response = requests.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+        filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
         
-        if not response.ok:
-            try:
-                err_data = response.json()
-            except:
-                err_data = {"error": response.text}
-            return jsonify(err_data), response.status_code
+        detected_content_type = 'application/octet-stream'
+        if filename_str.endswith('.json'):
+            detected_content_type = 'application/json'
+        elif filename_str.endswith('.manifest') or filename_str.endswith('.txt') or filename_str.endswith('.atlas'):
+            detected_content_type = 'text/plain'
+        elif filename_str.endswith('.ogg'):
+            detected_content_type = 'audio/ogg'
+        elif filename_str.endswith('.mp3'):
+            detected_content_type = 'audio/mpeg'
+        elif filename_str.endswith('.mp4'):
+            detected_content_type = 'video/mp4'
 
-        extractor_data = response.json()
-        assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
+        b64_content = asset.get("data", "")
+        file_bytes = base64.b64decode(b64_content) if b64_content else b""
 
-        # Process each extracted component to build safe base64-encoded stream routes
-        for asset in assets_list:
-            remote_preview_url = asset.get("preview_url") or asset.get("url")
-            if not remote_preview_url:
-                continue
+        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
 
-            # Convert relative path schema from extractor to absolute address format
-            if remote_preview_url.startswith('/'):
-                remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
+        global MEMORY_ASSET_CACHE
+        MEMORY_ASSET_CACHE[local_cache_token] = {
+            "content": file_bytes,
+            "filename": filename_str,
+            "content_type": detected_content_type
+        }
 
-            filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
+        if "preview_url" in asset: asset["preview_url"] = local_proxy_route
+        if "url" in asset: asset["url"] = local_proxy_route
+
+    # Populate matching keys to shield extraction layouts against missing elements [1]
+    if "files" not in extractor_data and "assets" in extractor_data:
+        extractor_data["files"] = extractor_data["assets"]
+    elif "assets" not in extractor_data and "files" in extractor_data:
+        extractor_data["assets"] = extractor_data["files"]
+
+    return jsonify(extractor_data), 200
+
+def process_file_logic():
+    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
+    token = request.args.get('token', '') or request.form.get('token', '')
+    
+    real_bundle_url = ""
+    if "token=" in bundle_url:
+        token_match = re.search(r'token=([^&]+)', bundle_url)
+        if token_match:
+            tok = token_match.group(1)
+            decoded = decode_token(tok)
+            if decoded:
+                real_bundle_url = decoded.get("url", "")
+    elif token:
+        decoded = decode_token(token)
+        if decoded:
+            real_bundle_url = decoded.get("url", "")
             
-            detected_content_type = 'application/octet-stream'
-            if filename_str.endswith('.json'):
-                detected_content_type = 'application/json'
-            elif filename_str.endswith('.manifest') or filename_str.endswith('.txt') or filename_str.endswith('.atlas'):
-                detected_content_type = 'text/plain'
-            elif filename_str.endswith('.ogg'):
-                detected_content_type = 'audio/ogg'
-            elif filename_str.endswith('.mp3'):
-                detected_content_type = 'audio/mpeg'
-            elif filename_str.endswith('.mp4'):
-                detected_content_type = 'video/mp4'
+    if not real_bundle_url and bundle_url.startswith("http"):
+        real_bundle_url = bundle_url
 
-            # Decode the base64 content received from extractor
-            b64_content = asset.get("data", "")
-            file_bytes = base64.b64decode(b64_content) if b64_content else b""
-
-            # Encode URL token (embedded with compressed file data for statelessness)
-            local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
-
-            # Keep in memory cache as fallback
-            global MEMORY_ASSET_CACHE
-            MEMORY_ASSET_CACHE[local_cache_token] = {
-                "content": file_bytes,
-                "filename": filename_str,
-                "content_type": detected_content_type
+    if 'file' in request.files:
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            files = {
+                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
             }
+            data = {
+                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
+            }
+            try:
+                response = requests.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                return handle_extractor_response(response)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
 
-            # Map streams to /api endpoint using safe parameter flags
-            local_proxy_route = f"/api?action=stream&token={local_cache_token}"
-            if "preview_url" in asset: asset["preview_url"] = local_proxy_route
-            if "url" in asset: asset["url"] = local_proxy_route
+    if real_bundle_url:
+        try:
+            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            response = requests.get(extractor_url, timeout=45)
+            return handle_extractor_response(response)
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
 
-        return jsonify(extractor_data), 200
-
-    except Exception as e:
-        return jsonify({"success": False, "message": f"Failed to connect to extractor pipeline: {str(e)}"}), 500
+    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
 
 def stream_cache_logic(token):
     if not token:
@@ -431,7 +508,6 @@ def stream_cache_logic(token):
         filename = decoded.get("filename", "file")
         mime_type = decoded.get("content_type", "application/octet-stream")
         
-        # Check if content is embedded directly in the token
         if "content_b64" in decoded:
             try:
                 content = base64.b64decode(decoded["content_b64"])
@@ -443,7 +519,6 @@ def stream_cache_logic(token):
             except:
                 pass
 
-        # Otherwise download it from the remote URL
         remote_url = decoded.get("url")
         if remote_url:
             try:
@@ -457,7 +532,6 @@ def stream_cache_logic(token):
             except Exception as e:
                 pass
 
-    # Fallback to local memory cache
     global MEMORY_ASSET_CACHE
     cached_item = MEMORY_ASSET_CACHE.get(token)
 
