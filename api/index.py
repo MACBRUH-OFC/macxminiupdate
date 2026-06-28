@@ -41,6 +41,7 @@ MEMORY_ASSET_CACHE = {}
 
 # Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
+PURGED_LEGACY_DB = False
 
 def get_mime_type(filename):
     mime, _ = mimetypes.guess_type(filename)
@@ -487,45 +488,6 @@ def handle_extractor_response(response):
         extractor_data["assets"] = extractor_data["files"]
     return jsonify(extractor_data), 200
 
-def process_file_logic():
-    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
-    token = request.args.get('token', '') or request.form.get('token', '')
-    real_bundle_url = ""
-    if "token=" in bundle_url:
-        token_match = re.search(r'token=([^&]+)', bundle_url)
-        if token_match:
-            tok = token_match.group(1)
-            decoded = decode_token(tok)
-            if decoded: real_bundle_url = decoded.get("url", "")
-    elif token:
-        decoded = decode_token(token)
-        if decoded: real_bundle_url = decoded.get("url", "")
-    if not real_bundle_url and bundle_url.startswith("http"):
-        real_bundle_url = bundle_url
-    if 'file' in request.files:
-        uploaded_file = request.files['file']
-        if uploaded_file.filename != '':
-            files = {
-                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
-            }
-            data = {
-                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
-            }
-            try:
-                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
-                return handle_extractor_response(response)
-            except Exception as e:
-                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
-    if real_bundle_url:
-        try:
-            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
-            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            response = http_session.get(extractor_url, timeout=45)
-            return handle_extractor_response(response)
-        except Exception as e:
-            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
-    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
-
 def stream_cache_logic(token):
     if not token: return "Missing token query parameter", 400
     decoded = decode_token(token)
@@ -678,148 +640,36 @@ def bulk_zip_logic(version):
 # Telegram Bot Database & Webhook System
 # ==========================================
 
-def send_message(chat_id, text, parse_mode=None):
-    payload = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-        return res.json()
-    except Exception as e:
-        print(f"Telegram send error: {e}")
-    return None
-
-def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
-    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-    except Exception as e:
-         print(f"Telegram menu send error: {e}")
-
-def read_db_from_chat(chat_id):
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            text = res["result"]["pinned_message"].get("text", "")
-            if "📦 DATABASE STORAGE" in text:
-                lines = text.split("\n")
-                for line in lines:
-                    line_strip = line.strip()
-                    if line_strip.startswith("{") and line_strip.endswith("}"):
-                        return json.loads(line_strip)
-    except Exception as e:
-        print(f"DB read warning for {chat_id}: {e}")
-    return None
-
-def write_db_to_chat(chat_id, db_dict):
-    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            msg = res["result"]["pinned_message"]
-            if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
-                    "chat_id": chat_id,
-                    "message_id": msg["message_id"],
-                    "text": db_text
-                }, timeout=10)
-                return
-        new_msg = send_message(chat_id, db_text)
-        if new_msg and new_msg.get("ok"):
-            msg_id = new_msg["result"]["message_id"]
-            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "disable_notification": True
-            }, timeout=10)
-    except Exception as e:
-         print(f"DB write warning: {e}")
-
-def get_db():
-    owner_db = read_db_from_chat(OWNER_ID)
-    if not owner_db:
-        owner_db = read_db_from_chat(GROUP_ID)
-        if owner_db:
-            write_db_to_chat(OWNER_ID, owner_db)
-            try:
-                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
-                if res.get("ok") and "pinned_message" in res["result"]:
-                    msg = res["result"]["pinned_message"]
-                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-            except Exception: pass
-            
-    if not owner_db:
-        return {
-            "allowed_users": [OWNER_ID], 
-            "pending_requests": [],
-            "rejection_sticker": None,
-            "owner_state": None
-        }
-        
-    # Clean up unnecessary legacy keys inside pinned DB message to prevent spam & size overheads
-    needs_write = False
-    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
-    for k in legacy_keys:
-        if k in owner_db:
-            owner_db.pop(k, None)
-            needs_write = True
-            
-    if "allowed_users" not in owner_db: 
-        owner_db["allowed_users"] = [OWNER_ID]
-        needs_write = True
-    if "pending_requests" not in owner_db: 
-        owner_db["pending_requests"] = []
-        needs_write = True
-        
-    if needs_write:
-        write_db_to_chat(OWNER_ID, owner_db)
-        
-    return owner_db
-
-def save_db(db):
-    write_db_to_chat(OWNER_ID, db)
-
-def is_user_allowed(user_id):
-    if user_id == OWNER_ID: return True
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
-    return False
-
 def is_action_permitted(chat_id, user_id):
     """Bypasses permissions entirely inside the designated allowed Group Chat."""
     if str(chat_id) == GROUP_ID:
         return True
-    return is_user_allowed(user_id)
+    return user_id == OWNER_ID
 
-def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
-    db = get_db()
-    allowed = db.get("allowed_users", [])
-    exists = False
-    for i, u in enumerate(allowed):
-        if isinstance(u, int) and u == user_id:
-            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
-            exists = True
-            break
-        elif isinstance(u, dict) and u.get("user_id") == user_id:
-            u["first_name"] = first_name
-            u["username"] = username
-            u["chat_title"] = chat_title
-            exists = True
-            break
-    if not exists:
-        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
-    db["allowed_users"] = allowed
-    save_db(db)
+def purge_database_messages():
+    global PURGED_LEGACY_DB
+    if PURGED_LEGACY_DB:
+        return
+    for chat in [GROUP_ID, OWNER_ID]:
+        try:
+            res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat}, timeout=8).json()
+            if res.get("ok") and "pinned_message" in res["result"]:
+                msg = res["result"]["pinned_message"]
+                if "DATABASE" in msg.get("text", "") or "STORAGE" in msg.get("text", ""):
+                    # Unpin
+                    http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": chat, "message_id": msg["message_id"]}, timeout=5)
+                    # Delete
+                    http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": chat, "message_id": msg["message_id"]}, timeout=5)
+        except Exception:
+            pass
+    PURGED_LEGACY_DB = True
 
-def send_access_request_menu(chat_id, user_id):
-    keyboard = [[{"text": "Request Access 🔑", "callback_data": f"req_access_{user_id}"}]]
-    send_message_with_keyboard(chat_id, "╭─❌ ACCESS RESTRICTED\n╰─You don't have access to this bot. Click below to request.", {"inline_keyboard": keyboard})
+def get_db():
+    # Deprecated/Removed Database storage parsing
+    return {"allowed_users": [OWNER_ID], "pending_requests": []}
+
+def save_db(db):
+    pass
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -994,130 +844,6 @@ def delete_message(chat_id, message_id):
         http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
     except Exception: pass
 
-def send_admin_main_menu(chat_id, message_id=None):
-    keyboard = [
-        [{"text": "👥 Permitted Users List", "callback_data": "admin_view_users"}],
-        [{"text": "⏳ Pending Access Requests", "callback_data": "admin_view_pending"}],
-        [{"text": "❌ Close Menu", "callback_data": "cb_close"}]
-    ]
-    reply_markup = {"inline_keyboard": keyboard}
-    text = (
-        "╭─🛠 OWNER ADMIN PANEL\n"
-        "│\n"
-        "├ Manage user permissions and approve or revoke\n"
-        "├ access requests silently.\n"
-        "╰──────────────────────"
-    )
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_admin_pending_view(chat_id, message_id=None):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    keyboard = []
-    if not pending:
-        text = "╭─⏳ PENDING REQUESTS\n│\n├ 📭 No pending access requests found.\n╰──────────────────────"
-    else:
-        text = "╭─⏳ PENDING REQUESTS\n│\n├ Click a request below to authorize:\n╰──────────────────────"
-        for p in pending:
-            uid = p["user_id"]
-            name = p.get("first_name", "Unknown")
-            username = p.get("username", "None")
-            keyboard.append([{"text": f"👤 {name} (@{username})", "callback_data": f"admin_manage_pending_{uid}"}])
-    keyboard.append([{"text": "⬅️ Back to Admin Panel", "callback_data": "admin_main"}])
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_admin_pending_manage(chat_id, target_uid, message_id=None):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    p_user = None
-    for p in pending:
-        if p["user_id"] == target_uid:
-            p_user = p
-            break
-    if not p_user:
-        text = "❌ Pending request not found."
-        keyboard = [[{"text": "⬅️ Back", "callback_data": "admin_view_pending"}]]
-    else:
-        name = p_user.get("first_name", "Unknown")
-        username = p_user.get("username", "None")
-        text = (
-            f"╭─⏳ AUTHORIZE USER\n"
-            f"├ Name: {name}\n"
-            f"├ ID: {target_uid}\n"
-            f"├ Username: @{username}\n"
-            "╰──────────────────────"
-        )
-        keyboard = [
-            [
-                {"text": "✅ Approve", "callback_data": f"auth_approve_{target_uid}"},
-                {"text": "❌ Reject", "callback_data": f"auth_reject_{target_uid}"}
-            ],
-            [{"text": "⬅️ Back", "callback_data": "admin_view_pending"}]
-        ]
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_admin_users_view(chat_id, message_id=None):
-    db = get_db()
-    users = db.get("allowed_users", [])
-    users = [u for u in users if (isinstance(u, dict) and u.get("user_id") != OWNER_ID) or (isinstance(u, int) and u != OWNER_ID)]
-    keyboard = []
-    if not users:
-        text = "╭─👥 PERMITTED USERS\n│\n├ No other users have permission.\n╰──────────────────────"
-    else:
-        text = "╭─👥 PERMITTED USERS\n│\n├ Click a user below to revoke their access:\n╰──────────────────────"
-        for u in users:
-            if isinstance(u, dict):
-                uid = u["user_id"]
-                name = u.get("first_name", "Unknown")
-                username = u.get("username", "None")
-                label = f"👤 {name} (@{username})"
-            else:
-                uid = u
-                label = f"👤 User [ID: {uid}]"
-            keyboard.append([{"text": label, "callback_data": f"admin_manage_user_{uid}"}])
-    keyboard.append([{"text": "⬅️ Back to Admin Panel", "callback_data": "admin_main"}])
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_user_management_view(chat_id, target_id, message_id=None):
-    db = get_db()
-    target_user = None
-    for u in db.get("allowed_users", []):
-        if isinstance(u, dict) and u.get("user_id") == target_id:
-            target_user = u
-            break
-    name = target_user.get("first_name", "Unknown") if target_user else f"ID: {target_id}"
-    username = target_user.get("username", "None") if target_user else "None"
-    text = (
-        f"╭─🛠 MANAGE USER: {name}\n"
-        f"├ ID: {target_id}\n"
-        f"├ Username: @{username}\n"
-        "╰──────────────────────"
-    )
-    keyboard = [
-        [{"text": "❌ Revoke Access", "callback_data": f"admin_revoke_{target_id}"}],
-        [{"text": "⬅️ Back to Users List", "callback_data": "admin_view_users"}]
-    ]
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
 
 # ==========================================
 # Flask Controller & Universal Path Router
@@ -1170,6 +896,9 @@ def handle_bot_webhook():
         update = request.get_json()
         if not update: return jsonify({"status": "ok"}), 200
 
+        # Run database unpin/delete cleanup task once bot runs
+        purge_database_messages()
+
         # Callback Queries
         if "callback_query" in update:
             cb = update["callback_query"]
@@ -1191,19 +920,23 @@ def handle_bot_webhook():
                 first_name = cb_user.get("first_name", "Unknown")
                 username = cb_user.get("username", "None")
                 
-                db = get_db()
-                pending = db.setdefault("pending_requests", [])
-                if not any(p["user_id"] == req_uid for p in pending):
-                    pending.append({"user_id": req_uid, "first_name": first_name, "username": username})
-                    save_db(db)
-                    
-                    send_message(OWNER_ID, (
+                # Manual request authorization prompting Owner's Personal Chat
+                http_session.post(f"{TELEGRAM_API}/sendMessage", json={
+                    "chat_id": OWNER_ID,
+                    "text": (
                         "╭─👤 ACCESS REQUEST DETECTED\n"
                         f"├ User: {first_name}\n"
                         f"├ ID: {req_uid}\n"
                         f"├ Username: @{username}\n"
                         "╰──────────────────────"
-                    ), parse_mode="Markdown")
+                    ),
+                    "reply_markup": {
+                        "inline_keyboard": [[
+                            {"text": "✅ Approve", "callback_data": f"auth_approve_{req_uid}"},
+                            {"text": "❌ Reject", "callback_data": f"auth_reject_{req_uid}"}
+                        ]]
+                    }
+                }, timeout=10)
                 
                 # Edit requester's button feedback state
                 http_session.post(f"{TELEGRAM_API}/editMessageText", json={
@@ -1220,52 +953,10 @@ def handle_bot_webhook():
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            # Admin Navigation callbacks
-            if data == "admin_main":
-                if user_id == OWNER_ID:
-                    send_admin_main_menu(chat_id, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-            elif data == "admin_view_users":
-                if user_id == OWNER_ID:
-                    send_admin_users_view(chat_id, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-            elif data == "admin_view_pending":
-                if user_id == OWNER_ID:
-                    send_admin_pending_view(chat_id, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-            elif data.startswith("admin_manage_pending_"):
-                if user_id == OWNER_ID:
-                    target_uid = int(data.split("_")[-1])
-                    send_admin_pending_manage(chat_id, target_uid, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-            elif data.startswith("admin_manage_user_"):
-                if user_id == OWNER_ID:
-                    target_uid = int(data.split("_")[-1])
-                    send_user_management_view(chat_id, target_uid, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-
             elif data.startswith("auth_approve_"):
                 if user_id == OWNER_ID:
                     target_id = int(data.split("_")[-1])
-                    db = get_db()
-                    pending = db.get("pending_requests", [])
-                    first_name = "Unknown"
-                    username = "None"
-                    for p in pending:
-                        if p["user_id"] == target_id:
-                            first_name = p.get("first_name", "Unknown")
-                            username = p.get("username", "None")
-                            break
-                    add_allowed_user(target_id, first_name, username)
-                    db = get_db() # Reload DB
-                    db["pending_requests"] = [p for p in db.get("pending_requests", []) if p["user_id"] != target_id]
-                    save_db(db)
-                    
+                    add_allowed_user(target_id)
                     http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"✅ User {target_id} APPROVED."}, timeout=10)
                     http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "User approved!"}, timeout=5)
                     send_message(target_id, "You have been granted access to the bot! 🎉\nUse /start to begin.")
@@ -1274,23 +965,9 @@ def handle_bot_webhook():
             elif data.startswith("auth_reject_"):
                 if user_id == OWNER_ID:
                     target_id = int(data.split("_")[-1])
-                    db = get_db()
-                    db["pending_requests"] = [p for p in db.get("pending_requests", []) if p["user_id"] != target_id]
-                    save_db(db)
                     http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"❌ User {target_id} REJECTED."}, timeout=10)
                     http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "User rejected."}, timeout=5)
                     send_message(target_id, "Your request was declined by the administrator.")
-                return jsonify({"status": "ok"}), 200
-
-            elif data.startswith("admin_revoke_"):
-                if user_id == OWNER_ID:
-                    target_id = int(data.split("_")[-1])
-                    db = get_db()
-                    db["allowed_users"] = [u for u in db.get("allowed_users", []) if (isinstance(u, int) and u != target_id) or (isinstance(u, dict) and u.get("user_id") != target_id)]
-                    save_db(db)
-                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"🚫 User {target_id} REVOKED."}, timeout=10)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access revoked!"}, timeout=5)
-                    send_message(target_id, "Your bot access has been revoked by the administrator.")
                 return jsonify({"status": "ok"}), 200
 
             # Extraction actions
@@ -1685,4 +1362,4 @@ def handle_bot_webhook():
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
-    return jsonify({"status": "ok"}).encode('utf-8')
+    return jsonify({"status": "ok"}), 200
