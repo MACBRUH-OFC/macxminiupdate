@@ -8,6 +8,8 @@ import zlib
 import io
 import zipfile
 import requests
+import hashlib
+import concurrent.futures
 from flask import Flask, jsonify, request, Response, send_file
 from flask_cors import CORS
 
@@ -18,17 +20,59 @@ BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract"
 
-# Local Persistent Session Cache Map fallback
+# Thread-safe persistent connection pooling
+http_session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=15, pool_maxsize=30)
+http_session.mount('http://', adapter)
+http_session.mount('https://', adapter)
+
+# Persistent file and extractor cache mapping to reduce sequential roundtrips
+FILE_INFO_CACHE = {}
+EXTRACTED_FILES_CACHE = {}
 MEMORY_ASSET_CACHE = {}
 
+def get_mime_type(filename):
+    mime, _ = mimetypes.guess_type(filename)
+    if mime:
+        return mime
+    
+    filename_lower = filename.lower()
+    if filename_lower.endswith('.json'):
+        return 'application/json'
+    elif filename_lower.endswith('.manifest') or filename_lower.endswith('.txt') or filename_lower.endswith('.atlas'):
+        return 'text/plain'
+    elif filename_lower.endswith('.ogg'):
+        return 'audio/ogg'
+    elif filename_lower.endswith('.mp3'):
+        return 'audio/mpeg'
+    elif filename_lower.endswith('.mp4'):
+        return 'video/mp4'
+    elif filename_lower.endswith('.png'):
+        return 'image/png'
+    elif filename_lower.endswith('.jpg') or filename_lower.endswith('.jpeg'):
+        return 'image/jpeg'
+    elif filename_lower.endswith('.gif'):
+        return 'image/gif'
+    elif filename_lower.endswith('.webp'):
+        return 'image/webp'
+    elif filename_lower.endswith('.obj'):
+        return 'text/plain'
+    
+    return 'application/octet-stream'
+
 def encode_token(remote_url, filename, content_type, content_bytes=None):
+    # Deterministic cache key based on remote target url to avoid huge string query parameters
+    cache_key = hashlib.sha256(remote_url.encode('utf-8')).hexdigest()
+    
     data = {
         "url": remote_url,
         "filename": filename,
-        "content_type": content_type
+        "content_type": content_type,
+        "cache_key": cache_key
     }
-    # Compress and embed content if it is small (under 100KB) to ensure statelessness on Vercel
-    if content_bytes and len(content_bytes) < 100000:
+    
+    # Embed content strictly under 2KB to prevent HTTP 414 Request-URI Too Large errors
+    if content_bytes and len(content_bytes) < 2048:
         data["content_b64"] = base64.b64encode(content_bytes).decode('utf-8')
         
     json_bytes = json.dumps(data).encode('utf-8')
@@ -43,7 +87,7 @@ def decode_token(token):
         compressed = base64.urlsafe_b64decode(token.encode('utf-8'))
         json_bytes = zlib.decompress(compressed)
         return json.loads(json_bytes.decode('utf-8'))
-    except Exception as e:
+    except Exception:
         return None
 
 def get_previous_version(version_str):
@@ -57,7 +101,7 @@ def get_previous_version(version_str):
                 parts[0] -= 1
                 parts[1] = 99
         return ".".join(map(str, parts))
-    except:
+    except Exception:
         return None
 
 def encode_suffix(suffix):
@@ -66,16 +110,24 @@ def encode_suffix(suffix):
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
 def get_file_info_data(version):
+    if version in FILE_INFO_CACHE:
+        return FILE_INFO_CACHE[version], version
+        
     url = f"{BASE_URL}{version}/fileinfo"
     try:
-        res = requests.get(url, timeout=6)
+        res = http_session.get(url, timeout=8)
         if res.status_code == 200:
+            FILE_INFO_CACHE[version] = res.text
             return res.text, version
-    except:
+    except Exception:
         pass
     return None, None
 
 def get_extracted_files(file_id, new_text, active_version):
+    cache_key = f"{active_version}:{file_id}"
+    if cache_key in EXTRACTED_FILES_CACHE:
+        return EXTRACTED_FILES_CACHE[cache_key]
+
     suffix = None
     for line in new_text.splitlines():
         if not line.strip(): continue
@@ -90,10 +142,12 @@ def get_extracted_files(file_id, new_text, active_version):
     try:
         encoded_url = base64.urlsafe_b64encode(download_url.encode('utf-8')).decode('utf-8')
         extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-        res = requests.get(extractor_url, timeout=30)
+        res = http_session.get(extractor_url, timeout=30)
         if res.status_code == 200:
             data = res.json()
-            return data.get("files", []) or data.get("assets", [])
+            files_list = data.get("files", []) or data.get("assets", [])
+            EXTRACTED_FILES_CACHE[cache_key] = files_list
+            return files_list
     except Exception as e:
         print(f"Failed to extract bundle {file_id}: {e}")
     return []
@@ -105,7 +159,7 @@ def find_previous_itemhotfix_content(active_version):
     
     major, middle, minor = parts[0], parts[1], int(parts[2])
     
-    # Trace back sequentially to version index 1 to locate the preceding build with itemhotfix [2]
+    # Trace back sequentially to locate preceding itemhotfixes
     for m_val in range(minor - 1, 0, -1):
         prev_ver = f"{major}.{middle}.{m_val}"
         prev_text, _ = get_file_info_data(prev_ver)
@@ -164,7 +218,6 @@ def extract_new_game_items(active_version, new_text):
     if not itemhotfix_content:
         return []
 
-    # Get the older itemhotfix data to isolate only the current unique additions [2]
     previous_itemhotfix_content = find_previous_itemhotfix_content(active_version)
     
     previous_item_ids = set()
@@ -207,7 +260,6 @@ def extract_new_game_items(active_version, new_text):
                 if not item_id or not item_id.isdigit():
                     continue
                 
-                # Filter out historical item IDs
                 if item_id in previous_item_ids:
                     continue
                 
@@ -280,7 +332,7 @@ def extract_new_game_items(active_version, new_text):
 
 def latest_version_logic():
     try:
-        res = requests.get(VERSION_API, timeout=5)
+        res = http_session.get(VERSION_API, timeout=5)
         data = res.json()
         if data.get("success") and "remote_version" in data:
             base_ver = data["remote_version"]
@@ -338,7 +390,7 @@ def check_update_logic():
                 file_id = parts[0].strip()
                 try:
                     old_size = int(parts[2])
-                except:
+                except Exception:
                     old_size = 0
                 old_files_map[file_id] = old_size
 
@@ -356,7 +408,7 @@ def check_update_logic():
 
         try: 
             size = int(size_str)
-        except: 
+        except Exception: 
             size = 0
 
         if file_id in old_files_map:
@@ -400,7 +452,7 @@ def handle_extractor_response(response):
     if not response.ok:
         try:
             err_data = response.json()
-        except:
+        except Exception:
             err_data = {"error": response.text}
         return jsonify(err_data), response.status_code
 
@@ -416,26 +468,19 @@ def handle_extractor_response(response):
             remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
 
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
-        
-        detected_content_type = 'application/octet-stream'
-        if filename_str.endswith('.json'):
-            detected_content_type = 'application/json'
-        elif filename_str.endswith('.manifest') or filename_str.endswith('.txt') or filename_str.endswith('.atlas'):
-            detected_content_type = 'text/plain'
-        elif filename_str.endswith('.ogg'):
-            detected_content_type = 'audio/ogg'
-        elif filename_str.endswith('.mp3'):
-            detected_content_type = 'audio/mpeg'
-        elif filename_str.endswith('.mp4'):
-            detected_content_type = 'video/mp4'
+        detected_content_type = get_mime_type(filename_str)
 
         b64_content = asset.get("data", "")
         file_bytes = base64.b64decode(b64_content) if b64_content else b""
 
         local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
 
+        # Retrieve cache key generated inside encode_token
+        decoded = decode_token(local_cache_token)
+        cache_key = decoded.get("cache_key") if decoded else local_cache_token
+
         global MEMORY_ASSET_CACHE
-        MEMORY_ASSET_CACHE[local_cache_token] = {
+        MEMORY_ASSET_CACHE[cache_key] = {
             "content": file_bytes,
             "filename": filename_str,
             "content_type": detected_content_type
@@ -445,7 +490,6 @@ def handle_extractor_response(response):
         if "preview_url" in asset: asset["preview_url"] = local_proxy_route
         if "url" in asset: asset["url"] = local_proxy_route
 
-    # Populate matching keys to shield extraction layouts against missing elements [1]
     if "files" not in extractor_data and "assets" in extractor_data:
         extractor_data["files"] = extractor_data["assets"]
     elif "assets" not in extractor_data and "files" in extractor_data:
@@ -483,7 +527,7 @@ def process_file_logic():
                 'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
             }
             try:
-                response = requests.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
                 return handle_extractor_response(response)
             except Exception as e:
                 return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
@@ -492,7 +536,7 @@ def process_file_logic():
         try:
             encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
             extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            response = requests.get(extractor_url, timeout=45)
+            response = http_session.get(extractor_url, timeout=45)
             return handle_extractor_response(response)
         except Exception as e:
             return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
@@ -504,46 +548,63 @@ def stream_cache_logic(token):
         return "Missing token query parameter", 400
 
     decoded = decode_token(token)
-    if decoded:
-        filename = decoded.get("filename", "file")
-        mime_type = decoded.get("content_type", "application/octet-stream")
-        
-        if "content_b64" in decoded:
-            try:
-                content = base64.b64decode(decoded["content_b64"])
-                response = Response(content, mimetype=mime_type)
+    if not decoded:
+        return "Expired or invalid stream token payload.", 404
+
+    filename = decoded.get("filename", "file")
+    mime_type = decoded.get("content_type", "application/octet-stream")
+    cache_key = decoded.get("cache_key")
+
+    global MEMORY_ASSET_CACHE
+
+    # 1. Look up in-memory cache
+    if cache_key and cache_key in MEMORY_ASSET_CACHE:
+        cached_item = MEMORY_ASSET_CACHE[cache_key]
+        response = Response(cached_item["content"], mimetype=mime_type)
+        response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    # 2. Check compressed token payload
+    if "content_b64" in decoded:
+        try:
+            content = base64.b64decode(decoded["content_b64"])
+            if cache_key:
+                MEMORY_ASSET_CACHE[cache_key] = {
+                    "content": content,
+                    "filename": filename,
+                    "content_type": mime_type
+                }
+            response = Response(content, mimetype=mime_type)
+            response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+            response.headers["Accept-Ranges"] = "bytes"
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        except Exception:
+            pass
+
+    # 3. Stateless fallback: Fetch from source URL dynamically
+    remote_url = decoded.get("url")
+    if remote_url:
+        try:
+            res = http_session.get(remote_url, timeout=15)
+            if res.status_code == 200:
+                if cache_key:
+                    MEMORY_ASSET_CACHE[cache_key] = {
+                        "content": res.content,
+                        "filename": filename,
+                        "content_type": mime_type
+                    }
+                response = Response(res.content, mimetype=mime_type)
                 response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
                 response.headers["Accept-Ranges"] = "bytes"
                 response.headers["Access-Control-Allow-Origin"] = "*"
                 return response
-            except:
-                pass
+        except Exception:
+            pass
 
-        remote_url = decoded.get("url")
-        if remote_url:
-            try:
-                res = requests.get(remote_url, timeout=15)
-                if res.status_code == 200:
-                    response = Response(res.content, mimetype=mime_type)
-                    response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
-                    response.headers["Accept-Ranges"] = "bytes"
-                    response.headers["Access-Control-Allow-Origin"] = "*"
-                    return response
-            except Exception as e:
-                pass
-
-    global MEMORY_ASSET_CACHE
-    cached_item = MEMORY_ASSET_CACHE.get(token)
-
-    if not cached_item:
-        return "Expired or invalid stream token payload.", 404
-
-    mime_type = cached_item["content_type"]
-    response = Response(cached_item["content"], mimetype=mime_type)
-    response.headers["Content-Disposition"] = f'inline; filename="{cached_item["filename"]}"'
-    response.headers["Accept-Ranges"] = "bytes"
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
+    return "Expired or unavailable stream token payload.", 404
 
 def extract_zip_logic(token):
     if not token:
@@ -561,7 +622,7 @@ def extract_zip_logic(token):
     extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}&download_type=zip"
     
     try:
-        res = requests.get(extractor_url, timeout=60, stream=True)
+        res = http_session.get(extractor_url, timeout=60, stream=True)
         if res.status_code == 200:
             filename = decoded.get("filename", "extracted_asset") + ".zip"
             def generate():
@@ -609,55 +670,74 @@ def bulk_zip_logic(version):
             parts = line.split(',')
             if len(parts) >= 3:
                 file_id = parts[0].strip()
-                try: old_size = int(parts[2])
-                except: old_size = 0
+                try: 
+                    old_size = int(parts[2])
+                except Exception: 
+                    old_size = 0
                 old_files_map[file_id] = old_size
+
+    targets = []
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
+
+        try: 
+            size = int(size_str)
+        except Exception: 
+            size = 0
+
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size:
+                pass
+            else:
+                continue
+        else:
+            pass
+
+        encoded = encode_suffix(suffix)
+        download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        targets.append((file_id, download_url))
+
+    if not targets:
+        return "No assets could be extracted for this version update", 400
 
     zip_io = io.BytesIO()
     files_added_to_zip = 0
-    
+
+    def concurrent_fetch_and_extract(target):
+        file_id, d_url = target
+        try:
+            encoded_url = base64.urlsafe_b64encode(d_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            res = http_session.get(extractor_url, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                return file_id, data.get("files", []) or data.get("assets", [])
+        except Exception as e:
+            print(f"Error parallel extracting {file_id}: {e}")
+        return file_id, []
+
     with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
-        for line in new_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) < 5: continue
-
-            file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
-            if not file_id or not suffix: continue
-
-            try: size = int(size_str)
-            except: size = 0
-
-            # Filter modified/new files
-            if file_id in old_files_map:
-                if old_files_map[file_id] != size:
-                    pass
-                else:
-                    continue
-            else:
-                pass
-
-            encoded = encode_suffix(suffix)
-            download_url = f"{BASE_URL}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        # Fetching bundles concurrently with max 10 concurrent threads to prevent server hangs
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures_map = executor.map(concurrent_fetch_and_extract, targets)
             
-            try:
-                # Call extractor statelessly using the remote URL
-                encoded_url = base64.urlsafe_b64encode(download_url.encode('utf-8')).decode('utf-8')
-                extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-                res = requests.get(extractor_url, timeout=45)
-                if res.status_code == 200:
-                    data = res.json()
-                    extracted_files = data.get("files", [])
-                    for ext_file in extracted_files:
-                        fname = ext_file.get("name")
-                        zpath = ext_file.get("path")
-                        b64_content = ext_file.get("data", "")
-                        if b64_content and fname:
+            for file_id, extracted_files in futures_map:
+                for ext_file in extracted_files:
+                    fname = ext_file.get("name")
+                    zpath = ext_file.get("path") or fname
+                    b64_content = ext_file.get("data", "")
+                    if b64_content and fname:
+                        try:
                             file_bytes = base64.b64decode(b64_content)
                             zf.writestr(f"{file_id}_extracted/{zpath}", file_bytes)
                             files_added_to_zip += 1
-            except Exception as e:
-                print(f"Failed to extract bundle {file_id}: {e}")
+                        except Exception:
+                            pass
                 
     if files_added_to_zip == 0:
         return "No assets could be extracted for this version update", 400
@@ -671,50 +751,37 @@ def bulk_zip_logic(version):
 @app.route('/api', methods=['GET', 'POST'])
 def handle_all_requests():
     action = request.args.get('action')
+    path = request.path.rstrip('/')
     
-    if not action:
-        path = request.path.rstrip('/')
-        if path == '/api/process' or path == '/process':
-            return process_file_logic()
-        elif path == '/api/latest-version' or path == '/latest-version':
-            return latest_version_logic()
-        elif path == '/api/update' or path == '/update':
-            return check_update_logic()
-        elif path == '/api/bulk-zip' or path == '/bulk-zip':
-            version = request.args.get('version', '').strip()
-            return bulk_zip_logic(version)
-        elif path.startswith('/api/stream-cache/') or path.startswith('/stream-cache/'):
-            token = path.split('/')[-1]
-            return stream_cache_logic(token)
-        elif path == '/api/extract-zip' or path == '/extract-zip':
-            token = request.args.get('token')
-            return extract_zip_logic(token)
-        
-        # Serves the static landing page
-        if request.method == 'GET' and (path == '' or path == '/api'):
-            try:
-                for filename in ['public/index.html', 'index.html']:
-                    if os.path.exists(filename):
-                        with open(filename, 'r', encoding='utf-8') as f:
-                            return f.read()
-                return jsonify({"success": False, "message": "index.html template missing"}), 404
-            except Exception as e:
-                return f"Error: {str(e)}", 500
-
-    if action == 'latest-version':
-        return latest_version_logic()
-    elif action == 'update':
-        return check_update_logic()
-    elif action == 'process':
+    if path == '/api/process' or path == '/process' or action == 'process':
         return process_file_logic()
+    elif path == '/api/latest-version' or path == '/latest-version' or action == 'latest-version':
+        return latest_version_logic()
+    elif path == '/api/update' or path == '/update' or action == 'update':
+        return check_update_logic()
+    elif path == '/api/bulk-zip' or path == '/bulk-zip' or action == 'bulk-zip':
+        version = request.args.get('version', '').strip()
+        return bulk_zip_logic(version)
+    elif path.startswith('/api/stream-cache/') or path.startswith('/stream-cache/'):
+        token = path.split('/')[-1]
+        return stream_cache_logic(token)
     elif action == 'stream':
         return stream_cache_logic(request.args.get('token'))
-    elif action == 'bulk-zip':
-        return bulk_zip_logic(request.args.get('version'))
-    elif action == 'extract-zip':
-        return extract_zip_logic(request.args.get('token'))
+    elif path == '/api/extract-zip' or path == '/extract-zip' or action == 'extract-zip':
+        token = request.args.get('token')
+        return extract_zip_logic(token)
+    
+    if request.method == 'GET' and (path == '' or path == '/api'):
+        try:
+            for filename in ['public/index.html', 'index.html']:
+                if os.path.exists(filename):
+                    with open(filename, 'r', encoding='utf-8') as f:
+                        return f.read()
+            return jsonify({"success": False, "message": "index.html template missing"}), 404
+        except Exception as e:
+            return f"Error: {str(e)}", 500
 
-    return jsonify({"success": False, "message": f"Action parameter '{action}' is unmapped."}), 404
+    return jsonify({"success": False, "message": f"Endpoint or Action parameter is unmapped."}), 404
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)

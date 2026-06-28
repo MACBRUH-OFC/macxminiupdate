@@ -250,6 +250,7 @@ let preCalculatedAutoVersion = "";
 let activeBuildIsNewPatch = false; 
 
 let offlineDataPayloadSessionCache = {};
+let currentPreviewRequestId = 0; // Guard against race conditions on fast selection clicks
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
@@ -391,7 +392,6 @@ extractBtn.onclick = async () => {
 
         document.getElementById('listActions').classList.remove('hidden');
         
-        // Dynamically toggle the display of New Items tab based on structural availability
         if (activeNewItems.length === 0) {
             document.getElementById("packageTabs").classList.add("hidden");
             document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => {
@@ -582,7 +582,6 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     if (sublist.children.length > 0) return;
 
     try {
-        // Direct stream processing loop through decryptor route mapping to stop upload overheads [1]
         const response = await fetch(`/api?action=process&bundle_url=${encodeURIComponent(url)}`);
         const extractedData = await response.json();
         loader.style.display = "none";
@@ -686,6 +685,9 @@ function showFallbackError(errorMessage) {
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
+    currentPreviewRequestId++;
+    const requestId = currentPreviewRequestId;
+
     document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
     if(element) element.classList.add('bg-zinc-900', 'text-white');
 
@@ -713,6 +715,8 @@ async function selectFile(item, element) {
     const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video');
     const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio');
     const isBinary = ['bin','bytes','dat','bundle','so','dll','apk','assets','db'].includes(ext) || lLabel.includes('binary') || lLabel.includes('bytes');
+
+    if (requestId !== currentPreviewRequestId) return;
 
     if (ext === 'obj' || lLabel.includes('mesh')) {
         mediaBox.innerHTML = `
@@ -791,11 +795,12 @@ async function selectFile(item, element) {
             const rawResponse = await fetch(liveSourceData);
             if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
             const arrayBuffer = await rawResponse.arrayBuffer();
+            if (requestId !== currentPreviewRequestId) return;
             document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
             const hexDump = getHexDump(arrayBuffer);
             document.getElementById('hexDumpContainer').textContent = hexDump;
         } catch (e) {
-            showFallbackError(e.message);
+            if (requestId === currentPreviewRequestId) showFallbackError(e.message);
         }
     } 
     else {
@@ -817,6 +822,8 @@ async function selectFile(item, element) {
                 processedTextString = contentText;
             }
 
+            if (requestId !== currentPreviewRequestId) return;
+
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
@@ -824,7 +831,7 @@ async function selectFile(item, element) {
                     </div>
                 </div>`;
         } catch (e) {
-            showFallbackError(e.message);
+            if (requestId === currentPreviewRequestId) showFallbackError(e.message);
         }
     }
 }
@@ -850,8 +857,21 @@ function downloadMasterBulkZip() {
 
 function cleanPreviousMediaTracks() {
     if (audioAnimationId) cancelAnimationFrame(audioAnimationId);
-    if (audioCtx) { audioCtx.close(); audioCtx = null; }
-    if (babylonEngine) { window.removeEventListener("resize", resizeBabylonViewportMatrix); babylonEngine.dispose(); babylonEngine = null; }
+    
+    const oldAudio = document.getElementById('customAudioPlayer');
+    if (oldAudio) { oldAudio.pause(); oldAudio.src = ""; }
+    const oldVideo = document.getElementById('customVideoPlayer');
+    if (oldVideo) { oldVideo.pause(); oldVideo.src = ""; }
+
+    if (audioCtx) { 
+        try { audioCtx.close(); } catch(e){} 
+        audioCtx = null; 
+    }
+    if (babylonEngine) { 
+        window.removeEventListener("resize", resizeBabylonViewportMatrix); 
+        try { babylonEngine.dispose(); } catch(e){}
+        babylonEngine = null; 
+    }
 }
 
 function initBabylonMeshScene(canvasId, modelUrl, filename) {
@@ -896,7 +916,10 @@ function initBabylonMeshScene(canvasId, modelUrl, filename) {
             mesh.position.subtractInPlace(computedCenter);
             mesh.scaling = new BABYLON.Vector3(targetScaleFactor, targetScaleFactor, targetScaleFactor);
         });
-    }, function() {}, function() {}, ".obj");
+    }, null, function(scene, message, exception) {
+        console.error("BabylonJS Mesh failed to load: ", message);
+        showFallbackError("3D model parsing failed: " + message);
+    }, ".obj");
     babylonEngine.runRenderLoop(() => { if (babylonScene) babylonScene.render(); });
     window.addEventListener("resize", resizeBabylonViewportMatrix, false);
 }
@@ -908,6 +931,8 @@ function initCustomVideoController() {
     const centerOverlay = document.getElementById('videoCenterOverlay');
     const timeline = document.getElementById('videoTimeline');
     const timeLabel = document.getElementById('videoTimeLabel');
+    let isDragging = false;
+
     function executeToggleAction() {
         if(video.ended) { video.currentTime = 0; video.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
         else if(video.paused) { video.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
@@ -915,9 +940,26 @@ function initCustomVideoController() {
     }
     playBtn.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
     centerOverlay.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
-    video.ontimeupdate = () => { if(!video.duration) return; timeline.value = (video.currentTime / video.duration) * 100; timeLabel.innerText = formatTimeMetrics(video.currentTime); };
-    video.onended = () => { playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); };
-    timeline.oninput = () => { video.currentTime = (timeline.value / 100) * video.duration; };
+    
+    video.ontimeupdate = () => { 
+        if(!video.duration || isDragging) return; 
+        timeline.value = (video.currentTime / video.duration) * 100; 
+        timeLabel.innerText = formatTimeMetrics(video.currentTime); 
+    };
+    video.onended = () => { 
+        playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; 
+        centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; 
+        centerOverlay.classList.remove('playing-hide'); 
+    };
+    
+    timeline.oninput = () => { 
+        isDragging = true;
+        if(video.duration) {
+            video.currentTime = (timeline.value / 100) * video.duration; 
+            timeLabel.innerText = formatTimeMetrics(video.currentTime);
+        }
+    };
+    timeline.onchange = () => { isDragging = false; };
 }
 
 function initCustomAudioController() {
@@ -928,9 +970,12 @@ function initCustomAudioController() {
     const timeLabel = document.getElementById('audioTimeLabel');
     const canvas = document.getElementById('audioVisualizerCanvas');
     const ctx = canvas.getContext('2d');
+    let isDragging = false;
+
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
     function executeToggleAction() {
         if(!audioCtx) { initAudioContextEngine(audio, canvas, ctx); }
         if(audio.ended) { audio.currentTime = 0; audio.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
@@ -939,9 +984,26 @@ function initCustomAudioController() {
     }
     playBtn.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
     centerOverlay.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
-    audio.ontimeupdate = () => { if(!audio.duration) return; timeline.value = (audio.currentTime / audio.duration) * 100; timeLabel.innerText = formatTimeMetrics(audio.currentTime); };
-    audio.onended = () => { playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); };
-    timeline.oninput = () => { audio.currentTime = (timeline.value / 100) * audio.duration; };
+    
+    audio.ontimeupdate = () => { 
+        if(!audio.duration || isDragging) return; 
+        timeline.value = (audio.currentTime / audio.duration) * 100; 
+        timeLabel.innerText = formatTimeMetrics(audio.currentTime); 
+    };
+    audio.onended = () => { 
+        playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; 
+        centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; 
+        centerOverlay.classList.remove('playing-hide'); 
+    };
+    
+    timeline.oninput = () => { 
+        isDragging = true;
+        if(audio.duration) {
+            audio.currentTime = (timeline.value / 100) * audio.duration; 
+            timeLabel.innerText = formatTimeMetrics(audio.currentTime);
+        }
+    };
+    timeline.onchange = () => { isDragging = false; };
 }
 
 function initAudioContextEngine(audioElement, canvas, ctx) {
