@@ -815,18 +815,18 @@ def run_miniupdate_extraction_details(version):
         try: size = int(size_str)
         except Exception: size = 0
         
+        # Calculate statistics based on all discovered files of the miniupdate
+        total_size += size
+        
         if file_id in old_files_map:
             if old_files_map[file_id] != size: 
                 status = "Modified"
                 changed_files_count += 1
-            else: 
-                continue
+                file_entries.append((file_id, status, size))
         else: 
             status = "New"
             new_files_count += 1
-            
-        total_size += size
-        file_entries.append((file_id, status, size))
+            file_entries.append((file_id, status, size))
 
     size_mb = round(total_size / (1024 * 1024), 2)
     
@@ -849,12 +849,11 @@ def run_miniupdate_extraction_details(version):
         else:
             sz_display = f"{sz_kb} KB"
             
-        # Clean paths to show only filename
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
-        msg.append(f"│ ▫️ {idx:02d}. {clean_fid_escaped}  ")
-        msg.append(f"│             ({stat}, {sz_display})")
+        msg.append(f"│ ▫️ {idx:02d}. <b>{clean_fid_escaped}</b>  ")
+        msg.append(f"│             <i>({stat}, {sz_display})</i>")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"│ ▫️ ... and {len(file_entries) - max_visible_files} more files.")
@@ -869,14 +868,15 @@ def run_miniupdate_extraction_details(version):
         msg.append("├ ✨ NEW GAME ITEMS:")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            msg.append(f"│ ▫️ {clean_name}")
-            msg.append(f"│       ID: <a href=\"{item['icon_url']}\">{item['id']}</a>")
+            # Emphasize linked name and italicized mono ID layout
+            msg.append(f"│ ▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
+            msg.append(f"│       ID: <code><i>{item['id']}</i></code>")
         if len(new_items) > 12:
             msg.append(f"│ ▫️ ... and {len(new_items) - 12} more items.")
 
     msg.append("╰──────────────────────")
     
-    # Store dynamic mapping for quick-extraction inline buttons
+    # Store mappings of first 5 changed files for in-place extraction execution
     db = get_db()
     temp_maps = db.setdefault("temp_mappings", {})
     file_keyboard_mappings = {}
@@ -1200,7 +1200,7 @@ def handle_bot_webhook():
             # Extraction actions
             elif data.startswith("check_ver_") or data.startswith("back_ver_"):
                 ver = data.replace("check_ver_", "").replace("back_ver_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Analyzing patch packages..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Comparing patch logs..."}, timeout=5)
                 
                 # Show dynamic in-progress tracking state in-place
                 url = f"{TELEGRAM_API}/editMessageText"
@@ -1216,7 +1216,7 @@ def handle_bot_webhook():
                     keyboard = []
                     if file_entries:
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                        # Top 5 package buttons to keep view pristine and clean
+                        # Quick extraction choices for changed files
                         for fid, mapping_id in list(file_keyboard_mappings.items())[:5]:
                             short_name = fid.split('/')[-1]
                             keyboard.append([{"text": f"🔍 Extract: {short_name}", "callback_data": f"ext_bnd_{mapping_id}"}])
@@ -1448,9 +1448,9 @@ def handle_bot_webhook():
                     send_message_with_keyboard(chat_id, (
                         "╭──────────────────────\n"
                         "├ New MINIUPDATE\n"
-                        f"├ Version: {ver}\n"
+                        f"├ Version: <b>{ver}</b>\n"
                         "╰──────────────────────"
-                    ), {"inline_keyboard": keyboard})
+                    ), {"inline_keyboard": keyboard}, parse_mode="HTML")
                     return jsonify({"status": "ok"}), 200
 
             # Access controls for private interaction commands
