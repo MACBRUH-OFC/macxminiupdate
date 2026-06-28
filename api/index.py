@@ -721,6 +721,11 @@ def is_action_permitted(chat_id, user_id):
     # Anyone inside the designated allowed Group Chat is allowed
     if str(chat_id) == GROUP_ID:
         return True
+    # Explicitly allowed users (via approved requests stored in Owner's DB) are allowed in private chat
+    db = get_db()
+    for u in db.get("allowed_users", []):
+        if isinstance(u, int) and u == user_id: return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
     return False
 
 def read_db_from_chat(chat_id):
@@ -1315,7 +1320,15 @@ def handle_bot_webhook():
                                 "reply_markup": {"inline_keyboard": keyboard}
                             }, timeout=10)
                         else:
-                            send_message(chat_id, "❌ Target subfile does not contain data.")
+                            keyboard = [[{"text": "⬅️ Back", "callback_data": f"ext_spec_{mapping_id}"}]]
+                            url = f"{TELEGRAM_API}/editMessageText"
+                            http_session.post(url, json={
+                                "chat_id": chat_id,
+                                "message_id": msg_id,
+                                "text": f"❌ Failed extracting <b>{fname}</b>: file data empty.",
+                                "parse_mode": "HTML",
+                                "reply_markup": {"inline_keyboard": keyboard}
+                            }, timeout=10)
                     else:
                         http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Out of bounds index."}, timeout=5)
                 else:
@@ -1473,7 +1486,7 @@ def handle_bot_webhook():
                                         }
                                         
                                         sub_names = "\n".join([f"│ ▫️ {idx}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
-                                        if len(sub_names) > 15:
+                                        if len(sub_files) > 15:
                                             sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
                                             
                                         keyboard = [[
