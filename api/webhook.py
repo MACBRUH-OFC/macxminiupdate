@@ -1,8 +1,14 @@
-import json
+import os
+import io
 import re
+import json
+import zlib
+import uuid
 import base64
 import hashlib
+import zipfile
 import requests
+import concurrent.futures
 from http.server import BaseHTTPRequestHandler
 
 # Telegram configuration
@@ -19,11 +25,11 @@ EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract"
 
 # Fast Connection pooling session
 http_session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=15, pool_maxsize=30)
+adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=50)
 http_session.mount('http://', adapter)
 http_session.mount('https://', adapter)
 
-# Persistent file and metadata extraction caching to avoid database spams
+# Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
 FILE_INFO_CACHE = {}
 EXTRACTED_FILES_CACHE = {}
@@ -548,14 +554,6 @@ def get_db():
 def save_db(db):
     write_db_to_chat(OWNER_ID, db)
 
-def is_user_allowed(user_id):
-    if user_id == OWNER_ID: return True
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
-    return False
-
 def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
     db = get_db()
     allowed = db.get("allowed_users", [])
@@ -577,7 +575,24 @@ def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title=
     save_db(db)
 
 
+# ==========================================
+# Vercel Serverless HTTP Request Handler Class
+# ==========================================
+
 class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """Diagnostic GET responder to confirm that the serverless webhook compiled and is active."""
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
+        response_data = {
+            "status": "active",
+            "message": "MINIUPDATE Bot Webhook is online and configured!",
+            "bot_token": BOT_TOKEN[:10] + "..."
+        }
+        self.wfile.write(json.dumps(response_data).encode('utf-8'))
+
     def do_POST(self):
         # Respond 200 OK immediately to Telegram to prevent duplicate retry spams
         self.send_response(200)
@@ -876,7 +891,15 @@ class handler(BaseHTTPRequestHandler):
                                 "reply_markup": {"inline_keyboard": keyboard}
                             }, timeout=10)
                         else:
-                            send_message(chat_id, "❌ Target subfile does not contain data.")
+                            keyboard = [[{"text": "⬅️ Back", "callback_data": f"ext_spec_{mapping_id}"}]]
+                            url = f"{TELEGRAM_API}/editMessageText"
+                            http_session.post(url, json={
+                                "chat_id": chat_id,
+                                "message_id": msg_id,
+                                "text": f"❌ Failed extracting <b>{fname}</b>: file data empty.",
+                                "parse_mode": "HTML",
+                                "reply_markup": {"inline_keyboard": keyboard}
+                            }, timeout=10)
                     else:
                         http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Out of bounds index."}, timeout=5)
                 else:
@@ -884,13 +907,12 @@ class handler(BaseHTTPRequestHandler):
 
             elif data.startswith("back_ext_"):
                 mapping_id = data.replace("back_ext_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
                     file_name = meta.get("filename", "bundle.unity3d")
                     target_url = meta.get("url")
-                    ver = meta.get("version", "1.126.6")
                     sub_files = parse_bundle_subfiles(target_url)
                     
                     sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
