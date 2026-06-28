@@ -1670,7 +1670,7 @@ def handle_all_requests():
     
     if request.method == 'GET' and (path == '' or path == '/api'):
         try:
-            for filename in ['public/index.html', 'index.html']:
+            for filename in ['api/index.html','public/index.html', 'index.html']:
                 if os.path.exists(filename):
                     with open(filename, 'r', encoding='utf-8') as f:
                         return f.read()
