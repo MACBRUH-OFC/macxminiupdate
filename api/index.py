@@ -369,116 +369,44 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
-def check_update_logic():
-    input_val = request.args.get('version', '').strip()
-    if not input_val:
-        return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
-    if "http" in input_val:
-        match = re.search(r'/android/(\d+\.\d+\.\d+)/', input_val)
-        version = match.group(1) if match else None
-    else:
-        version = input_val
-    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
-        
-    # Scan the next 3 versions in parallel on the webpage automatically
-    new_text, active_version, base_url = find_latest_active_version(version)
-    if not new_text:
-        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
-        
-    prev_versions = []
-    current_temp = active_version
-    for _ in range(6):
-        prev_ver = get_previous_version(current_temp)
-        if not prev_ver: break
-        prev_versions.append(prev_ver)
-        current_temp = prev_ver
-        
-    fetched_maps = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
-    old_files_map = {}
-    for old_text in reversed(old_texts):
-        for line in old_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 3:
-                file_id = parts[0].strip()
-                try: old_size = int(parts[2])
-                except Exception: old_size = 0
-                old_files_map[file_id] = old_size
-    file_infos = []
-    total_size = 0
-    for line in new_text.splitlines():
-        if not line.strip(): continue
-        parts = line.split(',')
-        if len(parts) < 5: continue
-        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
-        if not file_id or not suffix: continue
-        try: size = int(size_str)
-        except Exception: size = 0
-        if file_id in old_files_map:
-            if old_files_map[file_id] != size: status = "Modified"
-            else: continue
-        else:
-            status = "New"
-        encoded = encode_suffix(suffix)
-        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
-        file_name = file_id.split('/')[-1]
-        token = encode_token(download_url, file_name, 'application/octet-stream')
-        proxy_url = f"/api?action=stream&token={token}"
-        total_size += size
-        file_infos.append({
-            "fileName": file_id,
-            "size": size,
-            "url": proxy_url,
-            "status": status
-        })
-    new_items = []
-    try:
-        new_items = extract_new_game_items(active_version, new_text)
-    except Exception as e:
-        print(f"Error parsing game items hotfix: {e}")
-    return jsonify({
-        "success": True,
-        "version": active_version,
-        "totalSize": total_size,
-        "files": file_infos,
-        "new_items": new_items
-    })
-
-def handle_extractor_response(response):
-    if not response.ok:
-        try: err_data = response.json()
-        except Exception: err_data = {"error": response.text}
-        return jsonify(err_data), response.status_code
-    extractor_data = response.json()
-    assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
-    for asset in assets_list:
-        remote_preview_url = asset.get("preview_url") or asset.get("url")
-        if not remote_preview_url: continue
-        if remote_preview_url.startswith('/'):
-            remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
-        filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
-        detected_content_type = get_mime_type(filename_str)
-        b64_content = asset.get("data", "")
-        file_bytes = base64.b64decode(b64_content) if b64_content else b""
-        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
-        decoded = decode_token(local_cache_token)
-        cache_key = decoded.get("cache_key") if decoded else local_cache_token
-        global MEMORY_ASSET_CACHE
-        MEMORY_ASSET_CACHE[cache_key] = {
-            "content": file_bytes,
-            "filename": filename_str,
-            "content_type": detected_content_type
-        }
-        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
-        if "preview_url" in asset: asset["preview_url"] = local_proxy_route
-        if "url" in asset: asset["url"] = local_proxy_route
-    if "files" not in extractor_data and "assets" in extractor_data:
-        extractor_data["files"] = extractor_data["assets"]
-    elif "assets" not in extractor_data and "files" in extractor_data:
-        extractor_data["assets"] = extractor_data["files"]
-    return jsonify(extractor_data), 200
+def process_file_logic():
+    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
+    token = request.args.get('token', '') or request.form.get('token', '')
+    real_bundle_url = ""
+    if "token=" in bundle_url:
+        token_match = re.search(r'token=([^&]+)', bundle_url)
+        if token_match:
+            tok = token_match.group(1)
+            decoded = decode_token(tok)
+            if decoded: real_bundle_url = decoded.get("url", "")
+    elif token:
+        decoded = decode_token(token)
+        if decoded: real_bundle_url = decoded.get("url", "")
+    if not real_bundle_url and bundle_url.startswith("http"):
+        real_bundle_url = bundle_url
+    if 'file' in request.files:
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            files = {
+                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
+            }
+            data = {
+                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
+            }
+            try:
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                return handle_extractor_response(response)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
+    if real_bundle_url:
+        try:
+            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            response = http_session.get(extractor_url, timeout=45)
+            return handle_extractor_response(response)
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
+    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
 
 def stream_cache_logic(token):
     if not token: return "Missing token query parameter", 400
@@ -705,6 +633,7 @@ def get_db():
                         http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
                         http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
             except Exception: pass
+            
     if not owner_db:
         return {
             "allowed_users": [OWNER_ID], 
@@ -712,8 +641,25 @@ def get_db():
             "rejection_sticker": None,
             "owner_state": None
         }
-    if "allowed_users" not in owner_db: owner_db["allowed_users"] = [OWNER_ID]
-    if "pending_requests" not in owner_db: owner_db["pending_requests"] = []
+        
+    # Clean up unnecessary legacy keys inside pinned DB message to prevent spam & size overheads
+    needs_write = False
+    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
+    for k in legacy_keys:
+        if k in owner_db:
+            owner_db.pop(k, None)
+            needs_write = True
+            
+    if "allowed_users" not in owner_db: 
+        owner_db["allowed_users"] = [OWNER_ID]
+        needs_write = True
+    if "pending_requests" not in owner_db: 
+        owner_db["pending_requests"] = []
+        needs_write = True
+        
+    if needs_write:
+        write_db_to_chat(OWNER_ID, owner_db)
+        
     return owner_db
 
 def save_db(db):
@@ -1440,7 +1386,6 @@ def handle_bot_webhook():
                 if meta:
                     file_name = meta.get("filename", "bundle.unity3d")
                     target_url = meta.get("url")
-                    ver = meta.get("version", "1.126.6")
                     sub_files = parse_bundle_subfiles(target_url)
                     
                     sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
@@ -1622,12 +1567,3 @@ def handle_bot_webhook():
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
-
-# Serverless cold-start verification fallback loading static landing page inside api scope
-if not os.path.exists('api/index.html') and os.path.exists('public/index.html'):
-    try:
-        os.makedirs('api', exist_ok=True)
-        with open('public/index.html', 'r', encoding='utf-8') as src:
-            with open('api/index.html', 'w', encoding='utf-8') as dst:
-                dst.write(src.read())
-    except Exception: pass

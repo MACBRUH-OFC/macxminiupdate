@@ -348,7 +348,7 @@ async function initSystemMatrix() {
             radarIndicatorDot.className = "indicator-dot";
             
             if (data.target_version) {
-                txtAutoLabel.textContent = `Current Active: ${data.current_version} | Next: ${data.target_version}`;
+                txtAutoLabel.textContent = `Current Active: ${data.current_version} | Next Tracked: ${data.target_version}`;
             } else {
                 txtAutoLabel.textContent = "Current Active version ready";
             }
