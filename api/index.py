@@ -161,32 +161,6 @@ def get_multiple_file_info_data(versions):
             results[v] = FILE_INFO_CACHE[v]
     return results
 
-def find_latest_active_version(requested_version):
-    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
-    candidates = [requested_version]
-    for step in [1, 2, 3]:
-        nxt = get_next_version(requested_version, step)
-        if nxt:
-            candidates.append(nxt)
-            
-    fetched = get_multiple_file_info_data(candidates)
-    
-    for cand in reversed(candidates):
-        if cand in fetched:
-            return fetched[cand]
-            
-    current_temp = requested_version
-    for _ in range(5):
-        prev = get_previous_version(current_temp)
-        if not prev:
-            break
-        exact_fetched = get_multiple_file_info_data([prev])
-        if prev in exact_fetched:
-            return exact_fetched[prev]
-        current_temp = prev
-        
-    return None, None, None
-
 def get_extracted_files(file_id, new_text, active_version, base_url):
     cache_key = f"{active_version}:{file_id}"
     if cache_key in EXTRACTED_FILES_CACHE:
@@ -716,16 +690,27 @@ def bulk_zip_logic(version):
 # ==========================================
 
 def is_action_permitted(chat_id, user_id):
-    """Bypasses permissions entirely inside the designated allowed Group Chat."""
+    # 1. Owner is always allowed
+    if user_id == OWNER_ID:
+        return True
+    # 2. Anyone inside the allowed group chat is allowed
     if str(chat_id) == GROUP_ID:
         return True
-    return user_id == OWNER_ID
+    # 3. Explicitly allowed users (via approved requests stored in Owner's DB) are allowed in private chat
+    db = get_db()
+    for u in db.get("allowed_users", []):
+        if isinstance(u, int) and u == user_id:
+            return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id:
+            return True
+    return False
 
 def purge_database_messages():
     global PURGED_LEGACY_DB
     if PURGED_LEGACY_DB:
         return
-    for chat in [GROUP_ID, OWNER_ID]:
+    # Explicitly delete any old database storage pins from the Group chat
+    for chat in [GROUP_ID]:
         try:
             res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat}, timeout=8).json()
             if res.get("ok") and "pinned_message" in res["result"]:
@@ -740,11 +725,38 @@ def purge_database_messages():
     PURGED_LEGACY_DB = True
 
 def get_db():
-    # Deprecated/Removed Database storage parsing
-    return {"allowed_users": [OWNER_ID], "pending_requests": []}
+    """Reads persistent DB only from Owner personal chat to avoid group pins."""
+    owner_db = read_db_from_chat(OWNER_ID)
+    if not owner_db:
+        return {
+            "allowed_users": [OWNER_ID], 
+            "pending_requests": [],
+            "rejection_sticker": None,
+            "owner_state": None
+        }
+    
+    # Clean up legacy link checker values to keep space low
+    needs_write = False
+    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
+    for k in legacy_keys:
+        if k in owner_db:
+            owner_db.pop(k, None)
+            needs_write = True
+            
+    if "allowed_users" not in owner_db:
+        owner_db["allowed_users"] = [OWNER_ID]
+        needs_write = True
+    if "pending_requests" not in owner_db:
+        owner_db["pending_requests"] = []
+        needs_write = True
+        
+    if needs_write:
+        write_db_to_chat(OWNER_ID, owner_db)
+        
+    return owner_db
 
 def save_db(db):
-    pass
+    write_db_to_chat(OWNER_ID, db)
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -1078,7 +1090,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": msg_id,
+                        "message_id": sent_msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
