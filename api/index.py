@@ -721,31 +721,46 @@ def is_action_permitted(chat_id, user_id):
     # Anyone inside the designated allowed Group Chat is allowed
     if str(chat_id) == GROUP_ID:
         return True
-    # Explicitly allowed users (via approved requests stored in Owner's DB) are allowed in private chat
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
     return False
 
-def purge_database_messages():
-    global PURGED_LEGACY_DB
-    if PURGED_LEGACY_DB:
-        return
-    # Explicitly delete any old database storage pins from the Group chat only
-    for chat in [GROUP_ID]:
-        try:
-            res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat}, timeout=8).json()
-            if res.get("ok") and "pinned_message" in res["result"]:
-                msg = res["result"]["pinned_message"]
-                if "DATABASE" in msg.get("text", "") or "STORAGE" in msg.get("text", ""):
-                    # Unpin
-                    http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": chat, "message_id": msg["message_id"]}, timeout=5)
-                    # Delete
-                    http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": chat, "message_id": msg["message_id"]}, timeout=5)
-        except Exception:
-            pass
-    PURGED_LEGACY_DB = True
+def read_db_from_chat(chat_id):
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            text = res["result"]["pinned_message"].get("text", "")
+            if "📦 DATABASE STORAGE" in text:
+                lines = text.split("\n")
+                for line in lines:
+                    line_strip = line.strip()
+                    if line_strip.startswith("{") and line_strip.endswith("}"):
+                        return json.loads(line_strip)
+    except Exception as e:
+        print(f"DB read warning for {chat_id}: {e}")
+    return None
+
+def write_db_to_chat(chat_id, db_dict):
+    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            msg = res["result"]["pinned_message"]
+            if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
+                    "chat_id": chat_id,
+                    "message_id": msg["message_id"],
+                    "text": db_text
+                }, timeout=10)
+                return
+        new_msg = send_message(chat_id, db_text)
+        if new_msg and new_msg.get("ok"):
+            msg_id = new_msg["result"]["message_id"]
+            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "disable_notification": True
+            }, timeout=10)
+    except Exception as e:
+         print(f"DB write warning: {e}")
 
 def get_db():
     """Reads persistent DB only from Owner personal chat to avoid group pins."""
@@ -780,6 +795,30 @@ def get_db():
 
 def save_db(db):
     write_db_to_chat(OWNER_ID, db)
+
+def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
+    db = get_db()
+    allowed = db.get("allowed_users", [])
+    exists = False
+    for i, u in enumerate(allowed):
+        if isinstance(u, int) and u == user_id:
+            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
+            exists = True
+            break
+        elif isinstance(u, dict) and u.get("user_id") == user_id:
+            u["first_name"] = first_name
+            u["username"] = username
+            u["chat_title"] = chat_title
+            exists = True
+            break
+    if not exists:
+        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
+    db["allowed_users"] = allowed
+    save_db(db)
+
+def send_access_request_menu(chat_id, user_id):
+    keyboard = [[{"text": "Request Access 🔑", "callback_data": f"req_access_{user_id}"}]]
+    send_message_with_keyboard(chat_id, "╭─❌ ACCESS RESTRICTED\n╰─You don't have access to this bot. Click below to request.", {"inline_keyboard": keyboard})
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -956,8 +995,13 @@ def delete_message(chat_id, message_id):
 
 
 # ==========================================
-# Flask Controller & Universal Path Router
+# Flask Controller & Explicit Webhook Routes
 # ==========================================
+
+@app.route('/api/webhook', methods=['POST'])
+@app.route('/webhook', methods=['POST'])
+def telegram_webhook():
+    return handle_bot_webhook()
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
@@ -965,11 +1009,7 @@ def handle_all_requests(path):
     full_path = "/" + path.strip("/")
     action = request.args.get('action')
     
-    # Process Webhook requests first
-    if full_path == '/api/webhook' or full_path == '/webhook':
-        return handle_bot_webhook()
-        
-    elif full_path == '/api/process' or full_path == '/process' or action == 'process':
+    if full_path == '/api/process' or full_path == '/process' or action == 'process':
         return process_file_logic()
     elif full_path == '/api/latest-version' or full_path == '/latest-version' or action == 'latest-version':
         return latest_version_logic()
@@ -1003,9 +1043,6 @@ def handle_all_requests(path):
 
 def handle_bot_webhook():
     try:
-        # Run database unpin/delete cleanup task once bot runs
-        purge_database_messages()
-
         update = request.get_json()
         if not update: return jsonify({"status": "ok"}), 200
 
@@ -1278,15 +1315,7 @@ def handle_bot_webhook():
                                 "reply_markup": {"inline_keyboard": keyboard}
                             }, timeout=10)
                         else:
-                            keyboard = [[{"text": "⬅️ Back", "callback_data": f"ext_spec_{mapping_id}"}]]
-                            url = f"{TELEGRAM_API}/editMessageText"
-                            http_session.post(url, json={
-                                "chat_id": chat_id,
-                                "message_id": msg_id,
-                                "text": f"❌ Failed extracting <b>{fname}</b>: file data empty.",
-                                "parse_mode": "HTML",
-                                "reply_markup": {"inline_keyboard": keyboard}
-                            }, timeout=10)
+                            send_message(chat_id, "❌ Target subfile does not contain data.")
                     else:
                         http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Out of bounds index."}, timeout=5)
                 else:
@@ -1294,7 +1323,7 @@ def handle_bot_webhook():
 
             elif data.startswith("back_ext_"):
                 mapping_id = data.replace("back_ext_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
@@ -1444,7 +1473,7 @@ def handle_bot_webhook():
                                         }
                                         
                                         sub_names = "\n".join([f"│ ▫️ {idx}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
-                                        if len(sub_files) > 15:
+                                        if len(sub_names) > 15:
                                             sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
                                             
                                         keyboard = [[
