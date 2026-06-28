@@ -369,6 +369,123 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
+
+# ==========================================
+# Flask Web endpoints handlers
+# ==========================================
+
+def latest_version_logic():
+    try:
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
+            
+            # Start checking next 3 versions in parallel
+            candidates = [base_ver]
+            for step in [1, 2, 3]:
+                nxt = get_next_version(base_ver, step)
+                if nxt:
+                    candidates.append(nxt)
+            
+            # Fetch them in parallel
+            fetched = get_multiple_file_info_data(candidates)
+            
+            # Scan from the highest working candidate downwards to find the last working version
+            selected_ver = base_ver
+            for cand in reversed(candidates):
+                if cand in fetched:
+                    selected_ver = cand
+                    break
+            
+            # Return selected_ver and projected next tracking target
+            target_version = get_next_version(selected_ver, 1)
+            return jsonify({
+                "success": True, 
+                "current_version": selected_ver, 
+                "target_version": target_version
+            })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+    return jsonify({"success": False, "message": "Failed response lookup."}), 500
+
+def check_update_logic():
+    input_val = request.args.get('version', '').strip()
+    if not input_val:
+        return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
+    if "http" in input_val:
+        match = re.search(r'/android/(\d+\.\d+\.\d+)/', input_val)
+        version = match.group(1) if match else None
+    else:
+        version = input_val
+    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
+        return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
+        
+    # Strictly fetch the exact manual input version first (as requested)
+    new_text, active_version, base_url = get_file_info_data_exact(version)
+    if not new_text:
+        return jsonify({"success": False, "message": "Version not found."}), 404
+        
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+        
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: old_size = int(parts[2])
+                except Exception: old_size = 0
+                old_files_map[file_id] = old_size
+    file_infos = []
+    total_size = 0
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
+        try: size = int(size_str)
+        except Exception: size = 0
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: status = "Modified"
+            else: continue
+        else:
+            status = "New"
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        file_name = file_id.split('/')[-1]
+        token = encode_token(download_url, file_name, 'application/octet-stream')
+        proxy_url = f"/api?action=stream&token={token}"
+        total_size += size
+        file_infos.append({
+            "fileName": file_id,
+            "size": size,
+            "url": proxy_url,
+            "status": status
+        })
+    new_items = []
+    try:
+        new_items = extract_new_game_items(active_version, new_text)
+    except Exception as e:
+        print(f"Error parsing game items hotfix: {e}")
+    return jsonify({
+        "success": True,
+        "version": active_version,
+        "totalSize": total_size,
+        "files": file_infos,
+        "new_items": new_items
+    })
+
 def process_file_logic():
     bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
     token = request.args.get('token', '') or request.form.get('token', '')
@@ -554,450 +671,6 @@ def bulk_zip_logic(version):
     response = Response(zip_io.getvalue(), mimetype='application/zip')
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
-
-
-# ==========================================
-# Telegram Bot Database & Webhook System
-# ==========================================
-
-def send_message(chat_id, text, parse_mode=None):
-    payload = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-        return res.json()
-    except Exception as e:
-        print(f"Telegram send error: {e}")
-    return None
-
-def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
-    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-    except Exception as e:
-         print(f"Telegram menu send error: {e}")
-
-def read_db_from_chat(chat_id):
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            text = res["result"]["pinned_message"].get("text", "")
-            if "📦 DATABASE STORAGE" in text:
-                lines = text.split("\n")
-                for line in lines:
-                    line_strip = line.strip()
-                    if line_strip.startswith("{") and line_strip.endswith("}"):
-                        return json.loads(line_strip)
-    except Exception as e:
-        print(f"DB read warning for {chat_id}: {e}")
-    return None
-
-def write_db_to_chat(chat_id, db_dict):
-    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            msg = res["result"]["pinned_message"]
-            if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
-                    "chat_id": chat_id,
-                    "message_id": msg["message_id"],
-                    "text": db_text
-                }, timeout=10)
-                return
-        new_msg = send_message(chat_id, db_text)
-        if new_msg and new_msg.get("ok"):
-            msg_id = new_msg["result"]["message_id"]
-            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "disable_notification": True
-            }, timeout=10)
-    except Exception as e:
-         print(f"DB write warning: {e}")
-
-def get_db():
-    owner_db = read_db_from_chat(OWNER_ID)
-    if not owner_db:
-        owner_db = read_db_from_chat(GROUP_ID)
-        if owner_db:
-            write_db_to_chat(OWNER_ID, owner_db)
-            try:
-                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
-                if res.get("ok") and "pinned_message" in res["result"]:
-                    msg = res["result"]["pinned_message"]
-                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-            except Exception: pass
-            
-    if not owner_db:
-        return {
-            "allowed_users": [OWNER_ID], 
-            "pending_requests": [],
-            "rejection_sticker": None,
-            "owner_state": None
-        }
-        
-    # Clean up unnecessary legacy keys inside pinned DB message to prevent spam & size overheads
-    needs_write = False
-    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
-    for k in legacy_keys:
-        if k in owner_db:
-            owner_db.pop(k, None)
-            needs_write = True
-            
-    if "allowed_users" not in owner_db: 
-        owner_db["allowed_users"] = [OWNER_ID]
-        needs_write = True
-    if "pending_requests" not in owner_db: 
-        owner_db["pending_requests"] = []
-        needs_write = True
-        
-    if needs_write:
-        write_db_to_chat(OWNER_ID, owner_db)
-        
-    return owner_db
-
-def save_db(db):
-    write_db_to_chat(OWNER_ID, db)
-
-def is_user_allowed(user_id):
-    if user_id == OWNER_ID: return True
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
-    return False
-
-def is_action_permitted(chat_id, user_id):
-    """Bypasses permissions entirely inside the designated allowed Group Chat."""
-    if str(chat_id) == GROUP_ID:
-        return True
-    return is_user_allowed(user_id)
-
-def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
-    db = get_db()
-    allowed = db.get("allowed_users", [])
-    exists = False
-    for i, u in enumerate(allowed):
-        if isinstance(u, int) and u == user_id:
-            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
-            exists = True
-            break
-        elif isinstance(u, dict) and u.get("user_id") == user_id:
-            u["first_name"] = first_name
-            u["username"] = username
-            u["chat_title"] = chat_title
-            exists = True
-            break
-    if not exists:
-        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
-    db["allowed_users"] = allowed
-    save_db(db)
-
-def send_access_request_menu(chat_id, user_id):
-    keyboard = [[{"text": "Request Access 🔑", "callback_data": f"req_access_{user_id}"}]]
-    send_message_with_keyboard(chat_id, "╭─❌ ACCESS RESTRICTED\n╰─You don't have access to this bot. Click below to request.", {"inline_keyboard": keyboard})
-
-def run_miniupdate_extraction_details(version):
-    """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
-    new_text, active_version, base_url = get_file_info_data_exact(version)
-    if not new_text:
-        return f"❌ Version <b>{version}</b> not found.", None, {}
-
-    prev_versions = []
-    current_temp = active_version
-    for _ in range(6):
-        prev_ver = get_previous_version(current_temp)
-        if not prev_ver: break
-        prev_versions.append(prev_ver)
-        current_temp = prev_ver
-
-    fetched_maps = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
-
-    old_files_map = {}
-    for old_text in reversed(old_texts):
-        for line in old_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 3:
-                file_id = parts[0].strip()
-                try: sz = int(parts[2])
-                except Exception: sz = 0
-                old_files_map[file_id] = sz
-
-    file_entries = []
-    total_size = 0 # Sum of only updated (Modified + New) files as clarified by the user
-    new_files_count = 0
-    changed_files_count = 0
-
-    for line in new_text.splitlines():
-        if not line.strip(): continue
-        parts = line.split(',')
-        if len(parts) < 5: continue
-        file_id, size_str = parts[0].strip(), parts[2].strip()
-        try: size = int(size_str)
-        except Exception: size = 0
-        
-        if file_id in old_files_map:
-            if old_files_map[file_id] != size: 
-                status = "Modified"
-                changed_files_count += 1
-                total_size += size
-                file_entries.append((file_id, status, size))
-        else: 
-            status = "New"
-            new_files_count += 1
-            total_size += size
-            file_entries.append((file_id, status, size))
-
-    size_mb = round(total_size / (1024 * 1024), 2)
-    
-    msg = [
-        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
-        "│",
-        f"├ 🟢 Version Extracted: <b>{version}</b>",
-        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
-        f"├ Changed Files Count: <b>{changed_files_count}</b>",
-        f"├ New Files Count: <b>{new_files_count}</b>",
-        "│",
-        "├ 📂 DISCOVERED FILES:"
-    ]
-    
-    max_visible_files = 15
-    # Encapsulate listings in native Telegram blockquotes for premium visualization
-    msg.append("<blockquote>")
-    for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
-        sz_kb = round(sz / 1024, 1)
-        if sz_kb >= 1024:
-            sz_display = f"{round(sz_kb / 1024, 2)} MB"
-        else:
-            sz_display = f"{sz_kb} KB"
-            
-        clean_fid = fid.split('/')[-1]
-        clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        
-        # Removed vertical guides inside blockquote block to prevent double border lines
-        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
-        msg.append(f"      <i>({stat}, {sz_display})</i>")
-        
-    if len(file_entries) > max_visible_files:
-        msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
-    msg.append("</blockquote>")
-
-    new_items = []
-    try:
-        new_items = extract_new_game_items(version, new_text)
-    except Exception: pass
-
-    if new_items:
-        msg.append("│")
-        msg.append("├ ✨ NEW GAME ITEMS:")
-        msg.append("<blockquote>")
-        for idx, item in enumerate(new_items[:12], 1):
-            clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            # Emphasize linked name and italicized mono ID layout (removed brackets)
-            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
-            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
-        if len(new_items) > 12:
-            msg.append(f"... and {len(new_items) - 12} more items.")
-        msg.append("</blockquote>")
-
-    msg.append("╰──────────────────────")
-    
-    # Store dynamic mapping in local memory store to prevent database repinning spam
-    file_keyboard_mappings = {}
-    for file_id, stat, sz in file_entries[:5]:
-        mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
-        suffix = None
-        for line in new_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 5 and parts[0].strip() == file_id:
-                suffix = parts[4].strip()
-                break
-        if suffix:
-            encoded = encode_suffix(suffix)
-            download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
-            BOT_TEMP_MAPPINGS[mapping_id] = {
-                "url": download_url,
-                "filename": file_id.split('/')[-1],
-                "version": version
-            }
-            file_keyboard_mappings[file_id] = mapping_id
-            
-    return "\n".join(msg), file_entries, file_keyboard_mappings
-
-def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=None, filename="bundle.unity3d"):
-    try:
-        if is_local_upload and upload_bytes:
-            files = {'asset_bundle': (filename, upload_bytes, 'application/octet-stream')}
-            res = http_session.post(EXTRACTOR_API_URL, files=files, timeout=45)
-        else:
-            encoded_url = base64.urlsafe_b64encode(file_path_or_url.encode('utf-8')).decode('utf-8')
-            res = http_session.get(f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}", timeout=45)
-        
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("files", []) or data.get("assets", [])
-    except Exception as e:
-        print(f"Parse bundle processing failed: {e}")
-    return []
-
-def send_extracted_document_to_chat(chat_id, file_bytes, filename):
-    url = f"{TELEGRAM_API}/sendDocument"
-    files = {"document": (filename, file_bytes, 'application/octet-stream')}
-    payload = {"chat_id": chat_id}
-    try:
-        http_session.post(url, data=payload, files=files, timeout=45)
-    except Exception as e:
-         print(f"Error sending document: {e}")
-
-def clear_reply_markup(chat_id, message_id):
-    url = f"{TELEGRAM_API}/editMessageReplyMarkup"
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "reply_markup": {"inline_keyboard": []}
-    }
-    try:
-        http_session.post(url, json=payload, timeout=5)
-    except Exception: pass
-
-def delete_message(chat_id, message_id):
-    url = f"{TELEGRAM_API}/deleteMessage"
-    try:
-        http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
-    except Exception: pass
-
-def send_admin_main_menu(chat_id, message_id=None):
-    keyboard = [
-        [{"text": "👥 Permitted Users List", "callback_data": "admin_view_users"}],
-        [{"text": "⏳ Pending Access Requests", "callback_data": "admin_view_pending"}],
-        [{"text": "❌ Close Menu", "callback_data": "cb_close"}]
-    ]
-    reply_markup = {"inline_keyboard": keyboard}
-    text = (
-        "╭─🛠 OWNER ADMIN PANEL\n"
-        "│\n"
-        "├ Manage user permissions and approve or revoke\n"
-        "├ access requests silently.\n"
-        "╰──────────────────────"
-    )
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_admin_pending_view(chat_id, message_id=None):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    keyboard = []
-    if not pending:
-        text = "╭─⏳ PENDING REQUESTS\n│\n├ 📭 No pending access requests found.\n╰──────────────────────"
-    else:
-        text = "╭─⏳ PENDING REQUESTS\n│\n├ Click a request below to authorize:\n╰──────────────────────"
-        for p in pending:
-            uid = p["user_id"]
-            name = p.get("first_name", "Unknown")
-            username = p.get("username", "None")
-            keyboard.append([{"text": f"👤 {name} (@{username})", "callback_data": f"admin_manage_pending_{uid}"}])
-    keyboard.append([{"text": "⬅️ Back to Admin Panel", "callback_data": "admin_main"}])
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_admin_pending_manage(chat_id, target_uid, message_id=None):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    p_user = None
-    for p in pending:
-        if p["user_id"] == target_uid:
-            p_user = p
-            break
-    if not p_user:
-        text = "❌ Pending request not found."
-        keyboard = [[{"text": "⬅️ Back", "callback_data": "admin_view_pending"}]]
-    else:
-        name = p_user.get("first_name", "Unknown")
-        username = p_user.get("username", "None")
-        text = (
-            f"╭─⏳ AUTHORIZE USER\n"
-            f"├ Name: {name}\n"
-            f"├ ID: {target_uid}\n"
-            f"├ Username: @{username}\n"
-            "╰──────────────────────"
-        )
-        keyboard = [
-            [
-                {"text": "✅ Approve", "callback_data": f"auth_approve_{target_uid}"},
-                {"text": "❌ Reject", "callback_data": f"auth_reject_{target_uid}"}
-            ],
-            [{"text": "⬅️ Back", "callback_data": "admin_view_pending"}]
-        ]
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_admin_users_view(chat_id, message_id=None):
-    db = get_db()
-    users = db.get("allowed_users", [])
-    users = [u for u in users if (isinstance(u, dict) and u.get("user_id") != OWNER_ID) or (isinstance(u, int) and u != OWNER_ID)]
-    keyboard = []
-    if not users:
-        text = "╭─👥 PERMITTED USERS\n│\n├ No other users have permission.\n╰──────────────────────"
-    else:
-        text = "╭─👥 PERMITTED USERS\n│\n├ Click a user below to revoke their access:\n╰──────────────────────"
-        for u in users:
-            if isinstance(u, dict):
-                uid = u["user_id"]
-                name = u.get("first_name", "Unknown")
-                username = u.get("username", "None")
-                label = f"👤 {name} (@{username})"
-            else:
-                uid = u
-                label = f"👤 User [ID: {uid}]"
-            keyboard.append([{"text": label, "callback_data": f"admin_manage_user_{uid}"}])
-    keyboard.append([{"text": "⬅️ Back to Admin Panel", "callback_data": "admin_main"}])
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-
-def send_user_management_view(chat_id, target_id, message_id=None):
-    db = get_db()
-    target_user = None
-    for u in db.get("allowed_users", []):
-        if isinstance(u, dict) and u.get("user_id") == target_id:
-            target_user = u
-            break
-    name = target_user.get("first_name", "Unknown") if target_user else f"ID: {target_id}"
-    username = target_user.get("username", "None") if target_user else "None"
-    text = (
-        f"╭─🛠 MANAGE USER: {name}\n"
-        f"├ ID: {target_id}\n"
-        f"├ Username: @{username}\n"
-        "╰──────────────────────"
-    )
-    keyboard = [
-        [{"text": "❌ Revoke Access", "callback_data": f"admin_revoke_{target_id}"}],
-        [{"text": "⬅️ Back to Users List", "callback_data": "admin_view_users"}]
-    ]
-    reply_markup = {"inline_keyboard": keyboard}
-    if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
-    else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
 
 
 # ==========================================
