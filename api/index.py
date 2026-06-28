@@ -160,32 +160,6 @@ def get_multiple_file_info_data(versions):
             results[v] = FILE_INFO_CACHE[v]
     return results
 
-def find_latest_active_version(requested_version):
-    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
-    candidates = [requested_version]
-    for step in [1, 2, 3]:
-        nxt = get_next_version(requested_version, step)
-        if nxt:
-            candidates.append(nxt)
-            
-    fetched = get_multiple_file_info_data(candidates)
-    
-    for cand in reversed(candidates):
-        if cand in fetched:
-            return fetched[cand]
-            
-    current_temp = requested_version
-    for _ in range(5):
-        prev = get_previous_version(current_temp)
-        if not prev:
-            break
-        exact_fetched = get_multiple_file_info_data([prev])
-        if prev in exact_fetched:
-            return exact_fetched[prev]
-        current_temp = prev
-        
-    return None, None, None
-
 def get_extracted_files(file_id, new_text, active_version, base_url):
     cache_key = f"{active_version}:{file_id}"
     if cache_key in EXTRACTED_FILES_CACHE:
@@ -376,24 +350,21 @@ def latest_version_logic():
         if data.get("success") and "remote_version" in data:
             base_ver = data["remote_version"]  # e.g., 1.111.6
             
-            # Generate the list of versions to scan: base_ver + next 3 versions
+            # Concurrently scan base version + next 3 versions in parallel (Auto Radar only)
             candidates = [base_ver]
             for step in [1, 2, 3]:
                 nxt = get_next_version(base_ver, step)
                 if nxt:
                     candidates.append(nxt)
             
-            # Fetch all candidate version maps in parallel
             fetched_maps = get_multiple_file_info_data(candidates)
             
-            # Look from the highest candidate downwards to find the latest active one
             active_ver = base_ver
             for cand in reversed(candidates):
                 if cand in fetched_maps:
                     active_ver = cand
                     break
                     
-            # Let's calculate the projected target (next step from our found active_ver)
             target_ver = get_next_version(active_ver, 1)
             
             return jsonify({
@@ -416,39 +387,9 @@ def check_update_logic():
         version = input_val
     if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
         return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
-        
-    # Scan the requested version + next 3 versions in parallel on the webpage automatically
-    candidates = [version]
-    for step in [1, 2, 3]:
-        nxt = get_next_version(version, step)
-        if nxt:
-            candidates.append(nxt)
-            
-    fetched_maps = get_multiple_file_info_data(candidates)
-    
-    # Find highest working candidate
-    active_version = version
-    new_text = None
-    base_url = None
-    
-    for cand in reversed(candidates):
-        if cand in fetched_maps:
-            new_text, active_version, base_url = fetched_maps[cand]
-            break
-            
-    # Fallback to downward tracing if the exact input and none of the next versions exist
-    if not new_text:
-        current_temp = version
-        for _ in range(5):
-            prev = get_previous_version(current_temp)
-            if not prev:
-                break
-            exact_fetched = get_multiple_file_info_data([prev])
-            if prev in exact_fetched:
-                new_text, active_version, base_url = exact_fetched[prev]
-                break
-            current_temp = prev
 
+    # Strict exact check for manual search queries (as requested)
+    new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
         return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
         
@@ -882,25 +823,8 @@ def send_access_request_menu(chat_id, user_id):
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
-    # Scan the requested version + next 3 versions in parallel on the webpage automatically
-    candidates = [version]
-    for step in [1, 2, 3]:
-        nxt = get_next_version(version, step)
-        if nxt:
-            candidates.append(nxt)
-            
-    fetched_maps = get_multiple_file_info_data(candidates)
-    
-    # Find highest working candidate
-    active_version = version
-    new_text = None
-    base_url = None
-    
-    for cand in reversed(candidates):
-        if cand in fetched_maps:
-            new_text, active_version, base_url = fetched_maps[cand]
-            break
-
+    # Strict exact check for manual search queries (as requested)
+    new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
         return f"❌ Version <b>{version}</b> not found.", None, {}
 
@@ -912,8 +836,8 @@ def run_miniupdate_extraction_details(version):
         prev_versions.append(prev_ver)
         current_temp = prev_ver
 
-    fetched_maps_prev = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps_prev[v][0] for v in prev_versions if v in fetched_maps_prev]
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
 
     old_files_map = {}
     for old_text in reversed(old_texts):
@@ -956,7 +880,7 @@ def run_miniupdate_extraction_details(version):
     msg = [
         "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
         "│",
-        f"├ 🟢 Version Extracted: <b>{active_version}</b>",
+        f"├ 🟢 Version Extracted: <b>{version}</b>",
         f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
         f"├ Changed Files Count: <b>{changed_files_count}</b>",
         f"├ New Files Count: <b>{new_files_count}</b>",
@@ -987,7 +911,7 @@ def run_miniupdate_extraction_details(version):
 
     new_items = []
     try:
-        new_items = extract_new_game_items(active_version, new_text)
+        new_items = extract_new_game_items(version, new_text)
     except Exception: pass
 
     if new_items:
@@ -1008,7 +932,7 @@ def run_miniupdate_extraction_details(version):
     # Store dynamic mapping in local memory store to prevent database repinning spam
     file_keyboard_mappings = {}
     for file_id, stat, sz in file_entries[:5]:
-        mapping_id = hashlib.md5(f"{active_version}:{file_id}".encode('utf-8')).hexdigest()[:8]
+        mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
         suffix = None
         for line in new_text.splitlines():
             if not line.strip(): continue
@@ -1018,11 +942,11 @@ def run_miniupdate_extraction_details(version):
                 break
         if suffix:
             encoded = encode_suffix(suffix)
-            download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+            download_url = f"{base_url}{version}/gameassetbundles/{file_id}.{encoded}~3D"
             BOT_TEMP_MAPPINGS[mapping_id] = {
                 "url": download_url,
                 "filename": file_id.split('/')[-1],
-                "version": active_version
+                "version": version
             }
             file_keyboard_mappings[file_id] = mapping_id
             
@@ -1761,4 +1685,4 @@ def handle_bot_webhook():
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok"}).encode('utf-8')
