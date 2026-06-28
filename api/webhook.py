@@ -29,10 +29,23 @@ adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=50)
 http_session.mount('http://', adapter)
 http_session.mount('https://', adapter)
 
-# Stateless short-lived in-memory mappings to stop pinned database spam
+# Stateless short-lived in-memory mappings to stop database spam
 BOT_TEMP_MAPPINGS = {}
 FILE_INFO_CACHE = {}
 EXTRACTED_FILES_CACHE = {}
+
+# List of allowed user IDs permitted in private chats (Owner is natively allowed)
+ALLOWED_USERS = [OWNER_ID]
+
+def is_action_permitted(chat_id, user_id):
+    """Checks if the user has permission to interact with the bot."""
+    if user_id == OWNER_ID:
+        return True
+    if str(chat_id) == GROUP_ID:
+        return True
+    if user_id in ALLOWED_USERS:
+        return True
+    return False
 
 def get_previous_version(version_str):
     try:
@@ -461,105 +474,6 @@ def delete_message(chat_id, message_id):
         http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
     except Exception: pass
 
-# ==========================================
-# Database Persistence Direct Integration
-# ==========================================
-
-def read_db_from_chat(chat_id):
-    """Retrieves Database configuration directly from a specific chat ID's pinned messages."""
-    try:
-        url = f"{TELEGRAM_API}/getChat"
-        res = http_session.post(url, json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            text = res["result"]["pinned_message"].get("text", "")
-            if "📦 DATABASE STORAGE" in text:
-                lines = text.split("\n")
-                for line in lines:
-                    line_strip = line.strip()
-                    if line_strip.startswith("{") and line_strip.endswith("}"):
-                        return json.loads(line_strip)
-    except Exception as e:
-        print(f"Read error on chat {chat_id}: {e}")
-    return None
-
-def write_db_to_chat(chat_id, db_dict):
-    """Edits or Pins the unified Database structure in the specified chat ID."""
-    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
-    try:
-        url = f"{TELEGRAM_API}/getChat"
-        res = http_session.post(url, json={"chat_id": chat_id}, timeout=10).json()
-
-        if res.get("ok") and "pinned_message" in res["result"]:
-            msg = res["result"]["pinned_message"]
-            if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                edit_url = f"{TELEGRAM_API}/editMessageText"
-                http_session.post(edit_url, json={
-                    "chat_id": chat_id,
-                    "message_id": msg["message_id"],
-                    "text": db_text
-                }, timeout=10)
-                return
-
-        new_msg = send_message(chat_id, db_text)
-        if new_msg and new_msg.get("ok"):
-            msg_id = new_msg["result"]["message_id"]
-            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "disable_notification": True
-            }, timeout=10)
-    except Exception as e:
-        print(f"Write error on chat {chat_id}: {e}")
-
-def get_db():
-    """Fetches Database. Self-migrates from Group Chat to Owner Personal Chat if detected."""
-    owner_db = read_db_from_chat(OWNER_ID)
-    if not owner_db:
-        owner_db = read_db_from_chat(GROUP_ID)
-        if owner_db:
-            write_db_to_chat(OWNER_ID, owner_db)
-            try:
-                url = f"{TELEGRAM_API}/getChat"
-                res = http_session.post(url, json={"chat_id": GROUP_ID}, timeout=10).json()
-                if res.get("ok") and "pinned_message" in res["result"]:
-                    msg = res["result"]["pinned_message"]
-                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-            except Exception as e:
-                print(f"Migration cleanup warning: {e}")
-
-    if not owner_db:
-        return {
-            "allowed_users": [OWNER_ID], 
-            "pending_requests": [],
-            "rejection_sticker": None,
-            "owner_state": None
-        }
-
-    # Assure critical containers exist
-    if "allowed_users" not in owner_db:
-        owner_db["allowed_users"] = [OWNER_ID]
-    if "pending_requests" not in owner_db:
-        owner_db["pending_requests"] = []
-
-    return owner_db
-
-def save_db(db):
-    write_db_to_chat(OWNER_ID, db)
-
-def is_user_allowed(user_id):
-    if user_id == OWNER_ID:
-        return True
-    db = get_db()
-    allowed = db.get("allowed_users", [])
-    for u in allowed:
-        if isinstance(u, int) and u == user_id:
-            return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id:
-            return True
-    return False
-
 
 # ==========================================
 # Vercel Serverless HTTP Request Handler Class
@@ -711,72 +625,84 @@ class handler(BaseHTTPRequestHandler):
                     clear_reply_markup(chat_id, msg_id)
                     send_message(chat_id, "⚙️ Generating patch extraction package. Please stand by...")
                     
-                    zip_data = bulk_zip_logic(ver)
-                    if isinstance(zip_data, Response):
-                        send_extracted_document_to_chat(chat_id, zip_data.get_data(), f"FF_MiniUpdate_{ver}_Extracted.zip")
-                    else:
-                        send_message(chat_id, "❌ Archive generation failed.")
+                    # Execute direct bundle processing pipeline asynchronously
+                    try:
+                        zip_io = io.BytesIO()
+                        new_text, active_version, base_url = get_file_info_data_exact(ver)
+                        if new_text:
+                            prev_versions = []
+                            current_temp = active_version
+                            for _ in range(6):
+                                prev_ver = get_previous_version(current_temp)
+                                if not prev_ver: break
+                                prev_versions.append(prev_ver)
+                                current_temp = prev_ver
+                            fetched_maps = get_multiple_file_info_data(prev_versions)
+                            old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+                            old_files_map = {}
+                            for old_text in reversed(old_texts):
+                                for line in old_text.splitlines():
+                                    if not line.strip(): continue
+                                    parts = line.split(',')
+                                    if len(parts) >= 3:
+                                        file_id = parts[0].strip()
+                                        try: old_size = int(parts[2])
+                                        except Exception: old_size = 0
+                                        old_files_map[file_id] = old_size
+                            targets = []
+                            for line in new_text.splitlines():
+                                if not line.strip(): continue
+                                parts = line.split(',')
+                                if len(parts) < 5: continue
+                                file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+                                if not file_id or not suffix: continue
+                                try: size = int(size_str)
+                                except Exception: size = 0
+                                if file_id in old_files_map:
+                                    if old_files_map[file_id] != size: pass
+                                    else: continue
+                                else: pass
+                                encoded = encode_suffix(suffix)
+                                download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+                                targets.append((file_id, download_url))
+                            
+                            files_added = 0
+                            def concurrent_fetch_and_extract(target):
+                                f_id, d_url = target
+                                try:
+                                    encoded_url = base64.urlsafe_b64encode(d_url.encode('utf-8')).decode('utf-8')
+                                    extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+                                    res = http_session.get(extractor_url, timeout=25)
+                                    if res.status_code == 200:
+                                        data = res.json()
+                                        return f_id, data.get("files", []) or data.get("assets", [])
+                                except Exception: pass
+                                return f_id, []
 
-            elif data.startswith("ext_bnd_"):
-                mapping_id = data.replace("ext_bnd_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Extracting bundle files..."}, timeout=5)
-                
-                meta = BOT_TEMP_MAPPINGS.get(mapping_id)
-                if meta:
-                    file_name = meta.get("filename", "bundle.unity3d")
-                    target_url = meta.get("url")
-                    ver = meta.get("version", "1.126.6")
-                    
-                    # Update message to show "Extracting" progress state
-                    url = f"{TELEGRAM_API}/editMessageText"
-                    http_session.post(url, json={
-                        "chat_id": chat_id,
-                        "message_id": msg_id,
-                        "text": f"⏳ Extracting bundle: <b>{file_name}</b>...",
-                        "parse_mode": "HTML"
-                    }, timeout=10)
-                    
-                    sub_files = parse_bundle_subfiles(target_url)
-                    if sub_files:
-                        sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
-                        if len(sub_files) > 15:
-                            sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
-
-                        keyboard = [
-                            [
-                                {"text": "📦 Download All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
-                                {"text": "🔍 Download Specific File", "callback_data": f"ext_spec_{mapping_id}"}
-                            ],
-                            [{"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}]
-                        ]
-                        
-                        url = f"{TELEGRAM_API}/editMessageText"
-                        http_session.post(url, json={
-                            "chat_id": chat_id,
-                            "message_id": msg_id,
-                            "text": (
-                                "<b>╭─📦 BUNDLE EXTRACTION ────</b>\n"
-                                f"├ Source Bundle: <b>{file_name}</b>\n"
-                                "│\n"
-                                "├ Extracted Components:\n"
-                                f"{sub_names}\n"
-                                "╰─────────────────────────"
-                            ),
-                            "parse_mode": "HTML",
-                            "reply_markup": {"inline_keyboard": keyboard}
-                        }, timeout=10)
-                    else:
-                        keyboard = [[{"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}]]
-                        url = f"{TELEGRAM_API}/editMessageText"
-                        http_session.post(url, json={
-                            "chat_id": chat_id,
-                            "message_id": msg_id,
-                            "text": f"❌ Extraction failed or returned empty files for: <b>{file_name}</b>",
-                            "parse_mode": "HTML",
-                            "reply_markup": {"inline_keyboard": keyboard}
-                        }, timeout=10)
-                else:
-                    send_message(chat_id, "❌ Session expired.")
+                            with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+                                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                                    futures_map = executor.map(concurrent_fetch_and_extract, targets)
+                                    for file_id, extracted_files in futures_map:
+                                        for ext_file in extracted_files:
+                                            fname = ext_file.get("name")
+                                            zpath = ext_file.get("path") or fname
+                                            b64_content = ext_file.get("data", "")
+                                            if b64_content and fname:
+                                                try:
+                                                    file_bytes = base64.b64decode(b64_content)
+                                                    zf.writestr(f"{file_id}_extracted/{zpath}", file_bytes)
+                                                    files_added += 1
+                                                except Exception: pass
+                            
+                            if files_added > 0:
+                                zip_io.seek(0)
+                                send_extracted_document_to_chat(chat_id, zip_io.getvalue(), f"FF_MiniUpdate_{ver}_Extracted.zip")
+                            else:
+                                send_message(chat_id, "❌ Archive generation returned empty subfile lists.")
+                        else:
+                            send_message(chat_id, "❌ Target version logs missing from server.")
+                    except Exception as e:
+                        send_message(chat_id, f"❌ Failed building zip document: {str(e)}")
 
             elif data.startswith("ext_all_"):
                 mapping_id = data.replace("ext_all_", "")
@@ -879,6 +805,7 @@ class handler(BaseHTTPRequestHandler):
                 if meta:
                     file_name = meta.get("filename", "bundle.unity3d")
                     target_url = meta.get("url")
+                    ver = meta.get("version", "1.126.6")
                     sub_files = parse_bundle_subfiles(target_url)
                     
                     sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
