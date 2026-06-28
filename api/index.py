@@ -366,6 +366,24 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
+def latest_version_logic():
+    try:
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
+            parts = list(map(int, base_ver.split('.')))
+            parts[2] += 1
+            calculated_target = ".".join(map(str, parts))
+            return jsonify({
+                "success": True, 
+                "current_version": base_ver, 
+                "target_version": calculated_target
+            })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+    return jsonify({"success": False, "message": "Failed response lookup."}), 500
+
 def check_update_logic():
     input_val = request.args.get('version', '').strip()
     if not input_val:
@@ -476,6 +494,45 @@ def handle_extractor_response(response):
     elif "assets" not in extractor_data and "files" in extractor_data:
         extractor_data["assets"] = extractor_data["files"]
     return jsonify(extractor_data), 200
+
+def process_file_logic():
+    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
+    token = request.args.get('token', '') or request.form.get('token', '')
+    real_bundle_url = ""
+    if "token=" in bundle_url:
+        token_match = re.search(r'token=([^&]+)', bundle_url)
+        if token_match:
+            tok = token_match.group(1)
+            decoded = decode_token(tok)
+            if decoded: real_bundle_url = decoded.get("url", "")
+    elif token:
+        decoded = decode_token(token)
+        if decoded: real_bundle_url = decoded.get("url", "")
+    if not real_bundle_url and bundle_url.startswith("http"):
+        real_bundle_url = bundle_url
+    if 'file' in request.files:
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            files = {
+                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
+            }
+            data = {
+                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
+            }
+            try:
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                return handle_extractor_response(response)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
+    if real_bundle_url:
+        try:
+            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            response = http_session.get(extractor_url, timeout=45)
+            return handle_extractor_response(response)
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
+    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
 
 def stream_cache_logic(token):
     if not token: return "Missing token query parameter", 400
@@ -1613,7 +1670,7 @@ def handle_all_requests():
     
     if request.method == 'GET' and (path == '' or path == '/api'):
         try:
-            for filename in ['public/index.html', 'index.html']:
+            for filename in ['api/index.html', 'public/index.html', 'index.html']:
                 if os.path.exists(filename):
                     with open(filename, 'r', encoding='utf-8') as f:
                         return f.read()
