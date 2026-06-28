@@ -161,6 +161,32 @@ def get_multiple_file_info_data(versions):
             results[v] = FILE_INFO_CACHE[v]
     return results
 
+def find_latest_active_version(requested_version):
+    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
+    candidates = [requested_version]
+    for step in [1, 2, 3]:
+        nxt = get_next_version(requested_version, step)
+        if nxt:
+            candidates.append(nxt)
+            
+    fetched = get_multiple_file_info_data(candidates)
+    
+    for cand in reversed(candidates):
+        if cand in fetched:
+            return fetched[cand]
+            
+    current_temp = requested_version
+    for _ in range(5):
+        prev = get_previous_version(current_temp)
+        if not prev:
+            break
+        exact_fetched = get_multiple_file_info_data([prev])
+        if prev in exact_fetched:
+            return exact_fetched[prev]
+        current_temp = prev
+        
+    return None, None, None
+
 def get_extracted_files(file_id, new_text, active_version, base_url):
     cache_key = f"{active_version}:{file_id}"
     if cache_key in EXTRACTED_FILES_CACHE:
@@ -459,7 +485,12 @@ def handle_extractor_response(response):
         try: err_data = response.json()
         except Exception: err_data = {"error": response.text}
         return jsonify(err_data), response.status_code
-    extractor_data = response.json()
+        
+    try:
+        extractor_data = response.json()
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Invalid JSON returned from extractor: {str(e)}"}), 500
+
     assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
     for asset in assets_list:
         remote_preview_url = asset.get("preview_url") or asset.get("url")
@@ -468,8 +499,13 @@ def handle_extractor_response(response):
             remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
         detected_content_type = get_mime_type(filename_str)
+        
         b64_content = asset.get("data", "")
-        file_bytes = base64.b64decode(b64_content) if b64_content else b""
+        try:
+            file_bytes = base64.b64decode(b64_content) if b64_content else b""
+        except Exception:
+            file_bytes = b""
+
         local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
@@ -487,6 +523,45 @@ def handle_extractor_response(response):
     elif "assets" not in extractor_data and "files" in extractor_data:
         extractor_data["assets"] = extractor_data["files"]
     return jsonify(extractor_data), 200
+
+def process_file_logic():
+    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
+    token = request.args.get('token', '') or request.form.get('token', '')
+    real_bundle_url = ""
+    if "token=" in bundle_url:
+        token_match = re.search(r'token=([^&]+)', bundle_url)
+        if token_match:
+            tok = token_match.group(1)
+            decoded = decode_token(tok)
+            if decoded: real_bundle_url = decoded.get("url", "")
+    elif token:
+        decoded = decode_token(token)
+        if decoded: real_bundle_url = decoded.get("url", "")
+    if not real_bundle_url and bundle_url.startswith("http"):
+        real_bundle_url = bundle_url
+    if 'file' in request.files:
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            files = {
+                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
+            }
+            data = {
+                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
+            }
+            try:
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                return handle_extractor_response(response)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
+    if real_bundle_url:
+        try:
+            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            response = http_session.get(extractor_url, timeout=45)
+            return handle_extractor_response(response)
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
+    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
 
 def stream_cache_logic(token):
     if not token: return "Missing token query parameter", 400
@@ -893,11 +968,11 @@ def handle_all_requests(path):
 
 def handle_bot_webhook():
     try:
-        update = request.get_json()
-        if not update: return jsonify({"status": "ok"}), 200
-
         # Run database unpin/delete cleanup task once bot runs
         purge_database_messages()
+
+        update = request.get_json()
+        if not update: return jsonify({"status": "ok"}), 200
 
         # Callback Queries
         if "callback_query" in update:
@@ -1242,7 +1317,7 @@ def handle_bot_webhook():
             # Access controls for private interaction commands
             if raw_text.startswith("/"):
                 if not is_action_permitted(chat_id, user_id):
-                    if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract") or raw_text.startswith("/admin"):
+                    if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract"):
                         send_access_request_menu(chat_id, user_id)
                     return jsonify({"status": "ok"}), 200
 
@@ -1255,12 +1330,6 @@ def handle_bot_webhook():
                     "├ ▫️ /extract [replying to any asset file]\n"
                     "╰──────────────────────"
                 ))
-
-            elif raw_text.startswith("/admin"):
-                if user_id == OWNER_ID:
-                    send_admin_main_menu(chat_id)
-                else:
-                    send_message(chat_id, "❌ This command is restricted to the administrator.")
 
             elif raw_text.startswith("/check"):
                 parts = [p.strip() for p in raw_text.split(" ") if p.strip()]
