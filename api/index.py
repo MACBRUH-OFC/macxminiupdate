@@ -126,7 +126,7 @@ def get_file_info_data_exact(version):
     return None, None, None
 
 def get_file_info_data(version):
-    """Primary fetch routine for web and bots."""
+    """Primary fetch routine."""
     return get_file_info_data_exact(version)
 
 def get_multiple_file_info_data(versions):
@@ -366,44 +366,116 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
-def process_file_logic():
-    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
-    token = request.args.get('token', '') or request.form.get('token', '')
-    real_bundle_url = ""
-    if "token=" in bundle_url:
-        token_match = re.search(r'token=([^&]+)', bundle_url)
-        if token_match:
-            tok = token_match.group(1)
-            decoded = decode_token(tok)
-            if decoded: real_bundle_url = decoded.get("url", "")
-    elif token:
-        decoded = decode_token(token)
-        if decoded: real_bundle_url = decoded.get("url", "")
-    if not real_bundle_url and bundle_url.startswith("http"):
-        real_bundle_url = bundle_url
-    if 'file' in request.files:
-        uploaded_file = request.files['file']
-        if uploaded_file.filename != '':
-            files = {
-                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
-            }
-            data = {
-                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
-            }
-            try:
-                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
-                return handle_extractor_response(response)
-            except Exception as e:
-                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
-    if real_bundle_url:
-        try:
-            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
-            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            response = http_session.get(extractor_url, timeout=45)
-            return handle_extractor_response(response)
-        except Exception as e:
-            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
-    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
+def check_update_logic():
+    input_val = request.args.get('version', '').strip()
+    if not input_val:
+        return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
+    if "http" in input_val:
+        match = re.search(r'/android/(\d+\.\d+\.\d+)/', input_val)
+        version = match.group(1) if match else None
+    else:
+        version = input_val
+    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
+        return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
+        
+    # Scan the next 3 versions in parallel on the webpage automatically
+    new_text, active_version, base_url = find_latest_active_version(version)
+    if not new_text:
+        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
+        
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+        
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: old_size = int(parts[2])
+                except Exception: old_size = 0
+                old_files_map[file_id] = old_size
+    file_infos = []
+    total_size = 0
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
+        try: size = int(size_str)
+        except Exception: size = 0
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: status = "Modified"
+            else: continue
+        else:
+            status = "New"
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        file_name = file_id.split('/')[-1]
+        token = encode_token(download_url, file_name, 'application/octet-stream')
+        proxy_url = f"/api?action=stream&token={token}"
+        total_size += size
+        file_infos.append({
+            "fileName": file_id,
+            "size": size,
+            "url": proxy_url,
+            "status": status
+        })
+    new_items = []
+    try:
+        new_items = extract_new_game_items(active_version, new_text)
+    except Exception as e:
+        print(f"Error parsing game items hotfix: {e}")
+    return jsonify({
+        "success": True,
+        "version": active_version,
+        "totalSize": total_size,
+        "files": file_infos,
+        "new_items": new_items
+    })
+
+def handle_extractor_response(response):
+    if not response.ok:
+        try: err_data = response.json()
+        except Exception: err_data = {"error": response.text}
+        return jsonify(err_data), response.status_code
+    extractor_data = response.json()
+    assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
+    for asset in assets_list:
+        remote_preview_url = asset.get("preview_url") or asset.get("url")
+        if not remote_preview_url: continue
+        if remote_preview_url.startswith('/'):
+            remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
+        filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
+        detected_content_type = get_mime_type(filename_str)
+        b64_content = asset.get("data", "")
+        file_bytes = base64.b64decode(b64_content) if b64_content else b""
+        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
+        decoded = decode_token(local_cache_token)
+        cache_key = decoded.get("cache_key") if decoded else local_cache_token
+        global MEMORY_ASSET_CACHE
+        MEMORY_ASSET_CACHE[cache_key] = {
+            "content": file_bytes,
+            "filename": filename_str,
+            "content_type": detected_content_type
+        }
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
+        if "preview_url" in asset: asset["preview_url"] = local_proxy_route
+        if "url" in asset: asset["url"] = local_proxy_route
+    if "files" not in extractor_data and "assets" in extractor_data:
+        extractor_data["files"] = extractor_data["assets"]
+    elif "assets" not in extractor_data and "files" in extractor_data:
+        extractor_data["assets"] = extractor_data["files"]
+    return jsonify(extractor_data), 200
 
 def stream_cache_logic(token):
     if not token: return "Missing token query parameter", 400
@@ -751,6 +823,8 @@ def run_miniupdate_extraction_details(version):
     ]
     
     max_visible_files = 15
+    # Encapsulate listings in native Telegram blockquotes for premium visualization
+    msg.append("<blockquote>")
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
         sz_kb = round(sz / 1024, 1)
         if sz_kb >= 1024:
@@ -761,11 +835,12 @@ def run_miniupdate_extraction_details(version):
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
-        msg.append(f"│ ▫️ {idx:02d}. <b>{clean_fid_escaped}</b>  ")
-        msg.append(f"│             <i>({stat}, {sz_display})</i>")
+        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>  ")
+        msg.append(f"             <i>({stat}, {sz_display})</i>")
         
     if len(file_entries) > max_visible_files:
-        msg.append(f"│ ▫️ ... and {len(file_entries) - max_visible_files} more files.")
+        msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
+    msg.append("</blockquote>")
 
     new_items = []
     try:
@@ -775,13 +850,15 @@ def run_miniupdate_extraction_details(version):
     if new_items:
         msg.append("│")
         msg.append("├ ✨ NEW GAME ITEMS:")
+        msg.append("<blockquote>")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             # Emphasize linked name and italicized mono ID layout (removed brackets)
-            msg.append(f"│ ▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
-            msg.append(f"│       ID: <code><i>{item['id']}</i></code>")
+            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
+            msg.append(f"       ID: <code><i>{item['id']}</i></code>")
         if len(new_items) > 12:
-            msg.append(f"│ ▫️ ... and {len(new_items) - 12} more items.")
+            msg.append(f"... and {len(new_items) - 12} more items.")
+        msg.append("</blockquote>")
 
     msg.append("╰──────────────────────")
     
@@ -1125,7 +1202,7 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
-                        # Modified version summary layout contains only the Extract All as ZIP button (removed file extraction buttons)
+                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1298,7 +1375,7 @@ def handle_bot_webhook():
                             # Deliver extracted raw document to Telegram
                             send_extracted_document_to_chat(chat_id, file_bytes, fname)
                             
-                            # Edit current active card state to a success confirmation with back buttons
+                            # Auto-clean active markup buttons (as requested)
                             keyboard = [[{"text": "⬅️ Back to Files List", "callback_data": f"ext_spec_{mapping_id}"}]]
                             url = f"{TELEGRAM_API}/editMessageText"
                             http_session.post(url, json={

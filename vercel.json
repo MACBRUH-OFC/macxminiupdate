@@ -1,51 +1,19 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "public/**",
-      "use": "@vercel/static"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/webhook",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/api(.*)",
-      "dest": "api/index.py$1"
-    },
-    {
-      "src": "/process",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/latest-version",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/update",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/bulk-zip",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/stream-cache/(.*)",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/extract-zip",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "public/$1"
-    }
+  "rewrites": [
+    { "source": "/api/webhook", "destination": "/api/index.py" },
+    { "source": "/api", "destination": "/api/index.py" },
+    { "source": "/api/latest-version", "destination": "/api/index.py" },
+    { "source": "/api/update", "destination": "/api/index.py" },
+    { "source": "/api/process", "destination": "/api/index.py" },
+    { "source": "/api/bulk-zip", "destination": "/api/index.py" },
+    { "source": "/api/extract-zip", "destination": "/api/index.py" },
+    { "source": "/api/stream-cache/:token", "destination": "/api/index.py" },
+    { "source": "/latest-version", "destination": "/api/index.py" },
+    { "source": "/update", "destination": "/api/index.py" },
+    { "source": "/process", "destination": "/api/index.py" },
+    { "source": "/bulk-zip", "destination": "/api/index.py" },
+    { "source": "/extract-zip", "destination": "/api/index.py" },
+    { "source": "/stream-cache/:token", "destination": "/api/index.py" },
+    { "source": "/(.*)", "destination": "/public/$1" }
   ]
 }

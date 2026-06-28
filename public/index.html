@@ -190,6 +190,37 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
             </div>
 
+            <!-- Sleek SVG Stat Bar -->
+            <div id="webStatBar" class="hidden grid grid-cols-3 gap-2 p-2 bg-[#09090d]/60 border border-zinc-900 rounded-xl mb-3 text-left">
+                <div class="flex items-center gap-2 p-1.5 bg-black/40 rounded-lg border border-zinc-950/40">
+                    <div class="text-yellow-500 flex-shrink-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"></path></svg>
+                    </div>
+                    <div class="min-w-0">
+                        <span class="block text-[7px] font-black text-zinc-500 uppercase leading-none">Size</span>
+                        <span id="webTotalSizeVal" class="text-[9px] font-bold text-zinc-300">0.0 MB</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 p-1.5 bg-black/40 rounded-lg border border-zinc-950/40">
+                    <div class="text-emerald-400 flex-shrink-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <div class="min-w-0">
+                        <span class="block text-[7px] font-black text-zinc-500 uppercase leading-none">New</span>
+                        <span id="webNewFilesVal" class="text-[9px] font-bold text-zinc-300">0</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 p-1.5 bg-black/40 rounded-lg border border-zinc-950/40">
+                    <div class="text-amber-400 flex-shrink-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"></path></svg>
+                    </div>
+                    <div class="min-w-0">
+                        <span class="block text-[7px] font-black text-zinc-500 uppercase leading-none">Modified</span>
+                        <span id="webModFilesVal" class="text-[9px] font-bold text-zinc-300">0</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="tab-row mb-3 hidden" id="packageTabs">
                 <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)</div>
                 <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)</div>
@@ -307,15 +338,20 @@ async function initSystemMatrix() {
         txtAutoLabel.textContent = "Checking live channels...";
         radarIndicatorDot.className = "indicator-dot neutral";
 
-        const response = await fetch('/api?action=latest-version');
+        const response = await fetch('/api/latest-version');
         const data = await response.json();
 
-        if (data.success && data.target_version) {
-            preCalculatedAutoVersion = data.target_version;
+        if (data.success && data.current_version) {
+            preCalculatedAutoVersion = data.current_version;
             txtAutoTarget.textContent = preCalculatedAutoVersion;
             activeBuildIsNewPatch = true; 
-            txtAutoLabel.textContent = "New Miniupdate Version found";
             radarIndicatorDot.className = "indicator-dot";
+            
+            if (data.target_version) {
+                txtAutoLabel.textContent = `Current Active: ${data.current_version} | Next: ${data.target_version}`;
+            } else {
+                txtAutoLabel.textContent = "Current Active version ready";
+            }
         } else {
             activeBuildIsNewPatch = false;
             txtAutoLabel.textContent = "No new version found continue with current version";
@@ -369,6 +405,7 @@ function resetOutputWorkspace() {
 
     document.getElementById('listActions').classList.add('hidden');
     document.getElementById("packageTabs").classList.add("hidden");
+    document.getElementById('webStatBar').classList.add('hidden');
 
     cleanPreviousMediaTracks();
 
@@ -404,7 +441,7 @@ extractBtn.onclick = async () => {
     itemList.classList.add('hidden');
 
     try {
-        const res = await fetch(`/api?action=update&version=${encodeURIComponent(targetVersion)}`);
+        const res = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
         const data = await res.json();
         if(!data.success) throw new Error(data.message || "Failed parsing target channels.");
 
@@ -435,6 +472,15 @@ extractBtn.onclick = async () => {
                 itemList.classList.remove('hidden');
             }
         }
+
+        // Render Web UI Stats Bar above lists
+        const newCount = data.files.filter(f => f.status === "New").length;
+        const modCount = data.files.filter(f => f.status === "Modified").length;
+        
+        document.getElementById('webTotalSizeVal').innerText = computeByteScale(data.totalSize);
+        document.getElementById('webNewFilesVal').innerText = newCount;
+        document.getElementById('webModFilesVal').innerText = modCount;
+        document.getElementById('webStatBar').classList.remove('hidden');
 
         document.getElementById('statusBadge').innerText = "SUCCESS";
         document.getElementById('statusBadge').style.color = "var(--ff-emerald)";
@@ -608,7 +654,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     if (sublist.children.length > 0) return;
 
     try {
-        const response = await fetch(`/api?action=process&bundle_url=${encodeURIComponent(url)}`);
+        const response = await fetch(`/api/process?bundle_url=${encodeURIComponent(url)}`);
         const extractedData = await response.json();
         loader.style.display = "none";
 
@@ -869,7 +915,7 @@ function interceptDownloadZip(e, encodedUrl) {
     const token = tokenMatch ? tokenMatch[1] : null;
     
     if (token) {
-        window.open(`/api?action=extract-zip&token=${token}`, '_blank');
+        window.open(`/api/extract-zip?token=${token}`, '_blank');
     } else {
         showToast("Unable to download Zip: Invalid token mapping", false);
     }
@@ -878,7 +924,7 @@ function interceptDownloadZip(e, encodedUrl) {
 function downloadMasterBulkZip() {
     if(!activeCache.length) return;
     const targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
-    window.open(`/api?action=bulk-zip&version=${encodeURIComponent(targetVersion)}`, '_blank');
+    window.open(`/api/bulk-zip?version=${encodeURIComponent(targetVersion)}`, '_blank');
 }
 
 function cleanPreviousMediaTracks() {
