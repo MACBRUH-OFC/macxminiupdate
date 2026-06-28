@@ -778,7 +778,7 @@ def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
     new_text, active_version, base_url = get_file_info_data(version)
     if not new_text:
-        return f"❌ Version <b>{version}</b> not found.", None, []
+        return f"❌ Version <b>{version}</b> not found.", None, {}
 
     prev_versions = []
     current_temp = active_version
@@ -844,9 +844,17 @@ def run_miniupdate_extraction_details(version):
     max_visible_files = 15
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
         sz_kb = round(sz / 1024, 1)
-        # Escape HTML entities so filename symbols do not crash the Telegram HTML parser
-        clean_fid = fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        msg.append(f"│ ▫️ {idx:02d}. {clean_fid} ({stat}, {sz_kb} KB)")
+        if sz_kb >= 1024:
+            sz_display = f"{round(sz_kb / 1024, 2)} MB"
+        else:
+            sz_display = f"{sz_kb} KB"
+            
+        # Clean paths to show only filename
+        clean_fid = fid.split('/')[-1]
+        clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        
+        msg.append(f"│ ▫️ {idx:02d}. {clean_fid_escaped}  ")
+        msg.append(f"│             ({stat}, {sz_display})")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"│ ▫️ ... and {len(file_entries) - max_visible_files} more files.")
@@ -861,12 +869,39 @@ def run_miniupdate_extraction_details(version):
         msg.append("├ ✨ NEW GAME ITEMS:")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            msg.append(f"│ ▫️ <a href=\"{item['icon_url']}\">{clean_name} ({item['id']})</a>")
+            msg.append(f"│ ▫️ {clean_name}")
+            msg.append(f"│       ID: <a href=\"{item['icon_url']}\">{item['id']}</a>")
         if len(new_items) > 12:
             msg.append(f"│ ▫️ ... and {len(new_items) - 12} more items.")
 
     msg.append("╰──────────────────────")
-    return "\n".join(msg), file_entries, new_items
+    
+    # Store dynamic mapping for quick-extraction inline buttons
+    db = get_db()
+    temp_maps = db.setdefault("temp_mappings", {})
+    file_keyboard_mappings = {}
+    
+    for file_id, stat, sz in file_entries[:5]:
+        mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
+        suffix = None
+        for line in new_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 5 and parts[0].strip() == file_id:
+                suffix = parts[4].strip()
+                break
+        if suffix:
+            encoded = encode_suffix(suffix)
+            download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+            temp_maps[mapping_id] = {
+                "url": download_url,
+                "filename": file_id.split('/')[-1],
+                "version": version
+            }
+            file_keyboard_mappings[file_id] = mapping_id
+            
+    save_db(db)
+    return "\n".join(msg), file_entries, file_keyboard_mappings
 
 def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=None, filename="bundle.unity3d"):
     try:
@@ -1163,26 +1198,46 @@ def handle_bot_webhook():
                 return jsonify({"status": "ok"}), 200
 
             # Extraction actions
-            elif data.startswith("check_ver_"):
-                ver = data.replace("check_ver_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Comparing patch logs..."}, timeout=5)
+            elif data.startswith("check_ver_") or data.startswith("back_ver_"):
+                ver = data.replace("check_ver_", "").replace("back_ver_", "")
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Analyzing patch packages..."}, timeout=5)
                 
-                detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
-                keyboard = []
-                if file_entries:
-                    keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
-                
-                # Update current message in-place using HTML parse mode
+                # Show dynamic in-progress tracking state in-place
                 url = f"{TELEGRAM_API}/editMessageText"
                 http_session.post(url, json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
-                    "text": detail_msg,
-                    "parse_mode": "HTML",
-                    "reply_markup": {"inline_keyboard": keyboard}
+                    "text": f"⏳ Checking miniupdate version <b>{ver}</b>...",
+                    "parse_mode": "HTML"
                 }, timeout=10)
                 
+                try:
+                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
+                    keyboard = []
+                    if file_entries:
+                        keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
+                        # Top 5 package buttons to keep view pristine and clean
+                        for fid, mapping_id in list(file_keyboard_mappings.items())[:5]:
+                            short_name = fid.split('/')[-1]
+                            keyboard.append([{"text": f"🔍 Extract: {short_name}", "callback_data": f"ext_bnd_{mapping_id}"}])
+                    
+                    url = f"{TELEGRAM_API}/editMessageText"
+                    http_session.post(url, json={
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": detail_msg,
+                        "parse_mode": "HTML",
+                        "reply_markup": {"inline_keyboard": keyboard}
+                    }, timeout=10)
+                except Exception:
+                    url = f"{TELEGRAM_API}/editMessageText"
+                    http_session.post(url, json={
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": f"❌ Version <b>{ver}</b> not found.",
+                        "parse_mode": "HTML"
+                    }, timeout=10)
+
             elif data.startswith("zip_ver_"):
                 ver = data.replace("zip_ver_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Preparing ZIP archive..."}, timeout=5)
@@ -1194,6 +1249,68 @@ def handle_bot_webhook():
                     send_extracted_document_to_chat(chat_id, zip_data.get_data(), f"FF_MiniUpdate_{ver}_Extracted.zip")
                 else:
                     send_message(chat_id, "❌ Archive generation failed.")
+
+            elif data.startswith("ext_bnd_"):
+                mapping_id = data.replace("ext_bnd_", "")
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Extracting bundle files..."}, timeout=5)
+                
+                db = get_db()
+                meta = db.get("temp_mappings", {}).get(mapping_id)
+                if meta:
+                    file_name = meta.get("filename", "bundle.unity3d")
+                    target_url = meta.get("url")
+                    ver = meta.get("version", "1.126.6")
+                    
+                    # Update message to show "Extracting" progress state
+                    url = f"{TELEGRAM_API}/editMessageText"
+                    http_session.post(url, json={
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": f"⏳ Extracting bundle: <b>{file_name}</b>...",
+                        "parse_mode": "HTML"
+                    }, timeout=10)
+                    
+                    sub_files = parse_bundle_subfiles(target_url)
+                    if sub_files:
+                        sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
+                        if len(sub_files) > 15:
+                            sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
+
+                        keyboard = [
+                            [
+                                {"text": "📦 Download All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
+                                {"text": "🔍 Download Specific File", "callback_data": f"ext_spec_{mapping_id}"}
+                            ],
+                            [{"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}]
+                        ]
+                        
+                        url = f"{TELEGRAM_API}/editMessageText"
+                        http_session.post(url, json={
+                            "chat_id": chat_id,
+                            "message_id": msg_id,
+                            "text": (
+                                "<b>╭─📦 BUNDLE EXTRACTION ────</b>\n"
+                                f"├ Source Bundle: <b>{file_name}</b>\n"
+                                "│\n"
+                                "├ Extracted Components:\n"
+                                f"{sub_names}\n"
+                                "╰─────────────────────────"
+                            ),
+                            "parse_mode": "HTML",
+                            "reply_markup": {"inline_keyboard": keyboard}
+                        }, timeout=10)
+                    else:
+                        keyboard = [[{"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}]]
+                        url = f"{TELEGRAM_API}/editMessageText"
+                        http_session.post(url, json={
+                            "chat_id": chat_id,
+                            "message_id": msg_id,
+                            "text": f"❌ Extraction failed or returned empty files for: <b>{file_name}</b>",
+                            "parse_mode": "HTML",
+                            "reply_markup": {"inline_keyboard": keyboard}
+                        }, timeout=10)
+                else:
+                    send_message(chat_id, "❌ Session expired.")
 
             elif data.startswith("ext_all_"):
                 mapping_id = data.replace("ext_all_", "")
@@ -1233,13 +1350,11 @@ def handle_bot_webhook():
                     sub_files = parse_bundle_subfiles(target_url)
                     if sub_files:
                         keyboard = []
-                        # Limit specific downloads to top 15 components to avoid huge inline keyboards
                         for idx, sf in enumerate(sub_files[:15], 1):
                             fname = sf.get("name") or sf.get("fileName")
                             keyboard.append([{"text": f"📥 {idx}. {fname}", "callback_data": f"dlf_{mapping_id}_{idx-1}"}])
                         keyboard.append([
-                            {"text": "⬅️ Back", "callback_data": f"back_ext_{mapping_id}"},
-                            {"text": "❌ Close", "callback_data": "cb_close"}
+                            {"text": "⬅️ Back", "callback_data": f"back_ext_{mapping_id}"}
                         ])
                         send_message_with_keyboard(chat_id, "👇 Click on any file to download it directly:", {"inline_keyboard": keyboard})
                     else:
@@ -1252,7 +1367,8 @@ def handle_bot_webhook():
                 mapping_id = parts[1]
                 idx = int(parts[2])
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Downloading specific asset..."}, timeout=5)
-                
+                clear_reply_markup(chat_id, msg_id)
+
                 db = get_db()
                 meta = db.get("temp_mappings", {}).get(mapping_id)
                 if meta:
@@ -1282,15 +1398,15 @@ def handle_bot_webhook():
                     target_url = meta.get("url")
                     sub_files = parse_bundle_subfiles(target_url)
                     
-                    sub_names = "\n".join([f"│ ▫️ {idx}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
+                    sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
                     if len(sub_files) > 15:
                         sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
 
                     keyboard = [[
-                        {"text": "📦 Extract All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
-                        {"text": "🔍 Extract Specific File", "callback_data": f"ext_spec_{mapping_id}"}
+                        {"text": "📦 Download All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
+                        {"text": "🔍 Download Specific File", "callback_data": f"ext_spec_{mapping_id}"}
                     ], [
-                        {"text": "❌ Close Viewport", "callback_data": "cb_close"}
+                        {"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}
                     ]]
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1298,13 +1414,14 @@ def handle_bot_webhook():
                         "chat_id": chat_id,
                         "message_id": msg_id,
                         "text": (
-                            "╭─📦 BUNDLE EXTRACTION ────\n"
-                            f"├ Source Bundle: {file_name}\n"
+                            "<b>╭─📦 BUNDLE EXTRACTION ────</b>\n"
+                            f"├ Source Bundle: <b>{file_name}</b>\n"
                             "│\n"
                             "├ Extracted Components:\n"
                             f"{sub_names}\n"
                             "╰─────────────────────────"
                         ),
+                        "parse_mode": "HTML",
                         "reply_markup": {"inline_keyboard": keyboard}
                     }, timeout=10)
                 else:
@@ -1322,7 +1439,7 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching (strict format checking for the alert message)
+            # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
             if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
                 version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
                 if version_match:
@@ -1360,24 +1477,48 @@ def handle_bot_webhook():
                     send_message(chat_id, "❌ This command is restricted to the administrator.")
 
             elif raw_text.startswith("/check"):
-                parts = raw_text.split(" ")
+                parts = [p.strip() for p in raw_text.split(" ") if p.strip()]
                 if len(parts) < 2:
                     send_message(chat_id, "╭─❌ USAGE\n╰─/check [version]\n\nExample: /check 1.126.6")
                     return jsonify({"status": "ok"}), 200
                 ver = parts[1].strip()
+                
+                # Send live in-progress state first to feel active and responsive
+                sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
+                if not sent_msg or not sent_msg.get("ok"):
+                    return jsonify({"status": "ok"}), 200
+                
+                sent_msg_id = sent_msg["result"]["message_id"]
+                
                 try:
-                    detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
+                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                    keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
+                        # Quick extraction choices for changed files
+                        for fid, mapping_id in list(file_keyboard_mappings.items())[:5]:
+                            short_name = fid.split('/')[-1]
+                            keyboard.append([{"text": f"🔍 Extract: {short_name}", "callback_data": f"ext_bnd_{mapping_id}"}])
                     
-                    if keyboard and any(keyboard):
-                        send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="HTML")
-                    else:
-                        send_message(chat_id, detail_msg, parse_mode="HTML")
-                except Exception as e:
-                    send_message(chat_id, f"❌ Version <b>{ver}</b> not found.")
+                    url = f"{TELEGRAM_API}/editMessageText"
+                    payload = {
+                        "chat_id": chat_id,
+                        "message_id": sent_msg_id,
+                        "text": detail_msg,
+                        "parse_mode": "HTML"
+                    }
+                    if keyboard:
+                        payload["reply_markup"] = {"inline_keyboard": keyboard}
+                        
+                    http_session.post(url, json=payload, timeout=10)
+                except Exception:
+                    url = f"{TELEGRAM_API}/editMessageText"
+                    http_session.post(url, json={
+                        "chat_id": chat_id,
+                        "message_id": sent_msg_id,
+                        "text": f"❌ Version <b>{ver}</b> not found.",
+                        "parse_mode": "HTML"
+                    }, timeout=10)
 
             elif raw_text.startswith("/extract"):
                 if "reply_to_message" in msg:
@@ -1407,24 +1548,22 @@ def handle_bot_webhook():
                                         }
                                         save_db(db)
                                         
-                                        sub_names = "\n".join([f"│ ▫️ {idx}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
+                                        sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
                                         if len(sub_files) > 15:
                                             sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
                                             
                                         keyboard = [[
                                             {"text": "📦 Extract All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
                                             {"text": "🔍 Extract Specific File", "callback_data": f"ext_spec_{mapping_id}"}
-                                        ], [
-                                            {"text": "❌ Close Viewport", "callback_data": "cb_close"}
                                         ]]
                                         send_message_with_keyboard(chat_id, (
-                                            "╭─📦 BUNDLE EXTRACTION ────\n"
-                                            f"├ Source Bundle: {file_name}\n"
+                                            "<b>╭─📦 BUNDLE EXTRACTION ────</b>\n"
+                                            f"├ Source Bundle: <b>{file_name}</b>\n"
                                             "│\n"
                                             "├ Extracted Components:\n"
                                             f"{sub_names}\n"
                                             "╰─────────────────────────"
-                                        ), {"inline_keyboard": keyboard})
+                                        ), {"inline_keyboard": keyboard}, parse_mode="HTML")
                                     else:
                                         send_message(chat_id, "❌ Unable to parse subfiles inside the asset bundle.")
                                 else:
