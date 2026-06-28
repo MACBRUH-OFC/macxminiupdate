@@ -29,7 +29,7 @@ adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=50)
 http_session.mount('http://', adapter)
 http_session.mount('https://', adapter)
 
-# Stateless short-lived in-memory mappings to stop database spam
+# Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
 FILE_INFO_CACHE = {}
 EXTRACTED_FILES_CACHE = {}
@@ -474,6 +474,115 @@ def delete_message(chat_id, message_id):
         http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
     except Exception: pass
 
+def send_message(chat_id, text, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        return res.json()
+    except Exception as e:
+        print(f"Telegram send error: {e}")
+    return None
+
+def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+         print(f"Telegram menu send error: {e}")
+
+
+# ==========================================
+# Database Persistence Integration (Strictly in Owner Chat)
+# ==========================================
+
+def read_db_from_chat(chat_id):
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            text = res["result"]["pinned_message"].get("text", "")
+            if "📦 DATABASE STORAGE" in text:
+                lines = text.split("\n")
+                for line in lines:
+                    line_strip = line.strip()
+                    if line_strip.startswith("{") and line_strip.endswith("}"):
+                        return json.loads(line_strip)
+    except Exception as e:
+        print(f"DB read warning for {chat_id}: {e}")
+    return None
+
+def write_db_to_chat(chat_id, db_dict):
+    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            msg = res["result"]["pinned_message"]
+            if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
+                    "chat_id": chat_id,
+                    "message_id": msg["message_id"],
+                    "text": db_text
+                }, timeout=10)
+                return
+        new_msg = send_message(chat_id, db_text)
+        if new_msg and new_msg.get("ok"):
+            msg_id = new_msg["result"]["message_id"]
+            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "disable_notification": True
+            }, timeout=10)
+    except Exception as e:
+         print(f"DB write warning: {e}")
+
+def get_db():
+    owner_db = read_db_from_chat(OWNER_ID)
+    if not owner_db:
+        owner_db = read_db_from_chat(GROUP_ID)
+        if owner_db:
+            write_db_to_chat(OWNER_ID, owner_db)
+            try:
+                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
+                if res.get("ok") and "pinned_message" in res["result"]:
+                    msg = res["result"]["pinned_message"]
+                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+            except Exception: pass
+            
+    if not owner_db:
+        return {
+            "allowed_users": [OWNER_ID], 
+            "pending_requests": [],
+            "rejection_sticker": None,
+            "owner_state": None
+        }
+        
+    needs_write = False
+    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
+    for k in legacy_keys:
+        if k in owner_db:
+            owner_db.pop(k, None)
+            needs_write = True
+            
+    if "allowed_users" not in owner_db: 
+        owner_db["allowed_users"] = [OWNER_ID]
+        needs_write = True
+    if "pending_requests" not in owner_db: 
+        owner_db["pending_requests"] = []
+        needs_write = True
+        
+    if needs_write:
+        write_db_to_chat(OWNER_ID, owner_db)
+        
+    return owner_db
+
+def save_db(db):
+    write_db_to_chat(OWNER_ID, db)
+
 
 # ==========================================
 # Vercel Serverless HTTP Request Handler Class
@@ -481,15 +590,46 @@ def delete_message(chat_id, message_id):
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        """Diagnostic GET responder to confirm that the serverless webhook compiled and is active."""
+        """Diagnostic GET responder. Setups webhook with Telegram dynamically & sends Online Dialer to Owner personal chat."""
+        # Clean unpin legacy DB pinned messages on Startup
+        for chat in [GROUP_ID]:
+            try:
+                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat}, timeout=8).json()
+                if res.get("ok") and "pinned_message" in res["result"]:
+                    msg = res["result"]["pinned_message"]
+                    if "DATABASE" in msg.get("text", "") or "STORAGE" in msg.get("text", ""):
+                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": chat, "message_id": msg["message_id"]}, timeout=5)
+                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": chat, "message_id": msg["message_id"]}, timeout=5)
+            except Exception: pass
+
+        host = self.headers.get('Host')
+        protocol = "https" if "localhost" not in host else "http"
+        current_url = f"{protocol}://{host}/api/webhook"
+        
+        # 1. Automatically register/set the webhook URL on Telegram's servers
+        webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+        setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
+        
+        # 2. Send test diagnostic startup message to Owner personal chat
+        diagnostic_text = (
+            "<b>🔔 MINIUPDATE BOT ONLINE</b>\n\n"
+            "🟢 Webhook successfully compiled and is active!\n"
+            f"🔗 Webhook Registered: <code>{current_url}</code>\n"
+            f"📦 Telegram Response: <code>{json.dumps(setup_res)}</code>"
+        )
+        send_message(OWNER_ID, diagnostic_text, parse_mode="HTML")
+
+        # 3. Respond in browser
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         
         response_data = {
             "status": "active",
-            "message": "MINIUPDATE Bot Webhook is online and configured!",
-            "bot_token": BOT_TOKEN[:10] + "..."
+            "message": "Dynamic Webhook auto-configured! Diagnostic message sent to Owner.",
+            "bot_token": BOT_TOKEN[:10] + "...",
+            "registered_url": current_url,
+            "telegram_webhook_response": setup_res
         }
         self.wfile.write(json.dumps(response_data).encode('utf-8'))
 
@@ -625,7 +765,7 @@ class handler(BaseHTTPRequestHandler):
                     clear_reply_markup(chat_id, msg_id)
                     send_message(chat_id, "⚙️ Generating patch extraction package. Please stand by...")
                     
-                    # Execute direct bundle processing pipeline asynchronously
+                    # Call direct python bulk_zip_logic directly
                     try:
                         zip_io = io.BytesIO()
                         new_text, active_version, base_url = get_file_info_data_exact(ver)
