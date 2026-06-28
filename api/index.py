@@ -95,12 +95,21 @@ def get_previous_version(version_str):
     except Exception:
         return None
 
+def get_next_version(version_str, step=1):
+    try:
+        parts = list(map(int, version_str.split('.')))
+        parts[2] += step
+        return ".".join(map(str, parts))
+    except Exception:
+        return None
+
 def encode_suffix(suffix):
     if suffix.endswith('='):
         suffix = suffix[:-1]
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
-def get_file_info_data(version):
+def get_file_info_data_exact(version):
+    """Fetches exact version without fallback."""
     if version in FILE_INFO_CACHE:
         return FILE_INFO_CACHE[version]
         
@@ -114,21 +123,11 @@ def get_file_info_data(version):
                 return val
         except Exception:
             pass
-            
-    # Try fallback previous version
-    fallback_ver = get_previous_version(version)
-    if fallback_ver:
-        for base in DOMAINS:
-            url = f"{base}{fallback_ver}/fileinfo"
-            try:
-                res = http_session.get(url, timeout=4)
-                if res.status_code == 200:
-                    val = (res.text, fallback_ver, base)
-                    FILE_INFO_CACHE[version] = val
-                    return val
-            except Exception:
-                pass
     return None, None, None
+
+def get_file_info_data(version):
+    """Primary fetch routine for web and bots."""
+    return get_file_info_data_exact(version)
 
 def get_multiple_file_info_data(versions):
     results = {}
@@ -157,6 +156,32 @@ def get_multiple_file_info_data(versions):
         if v in FILE_INFO_CACHE:
             results[v] = FILE_INFO_CACHE[v]
     return results
+
+def find_latest_active_version(requested_version):
+    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
+    candidates = [requested_version]
+    for step in [1, 2, 3]:
+        nxt = get_next_version(requested_version, step)
+        if nxt:
+            candidates.append(nxt)
+            
+    fetched = get_multiple_file_info_data(candidates)
+    
+    for cand in reversed(candidates):
+        if cand in fetched:
+            return fetched[cand]
+            
+    current_temp = requested_version
+    for _ in range(5):
+        prev = get_previous_version(current_temp)
+        if not prev:
+            break
+        exact_fetched = get_multiple_file_info_data([prev])
+        if prev in exact_fetched:
+            return exact_fetched[prev]
+        current_temp = prev
+        
+    return None, None, None
 
 def get_extracted_files(file_id, new_text, active_version, base_url):
     cache_key = f"{active_version}:{file_id}"
@@ -340,127 +365,6 @@ def extract_new_game_items(active_version, new_text):
                 "is_bundle": False
             })
     return grouped_items
-
-def latest_version_logic():
-    try:
-        res = http_session.get(VERSION_API, timeout=5)
-        data = res.json()
-        if data.get("success") and "remote_version" in data:
-            base_ver = data["remote_version"]
-            parts = list(map(int, base_ver.split('.')))
-            parts[2] += 1
-            calculated_target = ".".join(map(str, parts))
-            return jsonify({"success": True, "target_version": calculated_target})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    return jsonify({"success": False, "message": "Failed response lookup."}), 500
-
-def check_update_logic():
-    input_val = request.args.get('version', '').strip()
-    if not input_val:
-        return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
-    if "http" in input_val:
-        match = re.search(r'/(\d+\.\d+\.\d+)/', input_val)
-        version = match.group(1) if match else None
-    else:
-        version = input_val
-    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
-    new_text, active_version, base_url = get_file_info_data(version)
-    if not new_text:
-        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
-    prev_versions = []
-    current_temp = active_version
-    for _ in range(6):
-        prev_ver = get_previous_version(current_temp)
-        if not prev_ver: break
-        prev_versions.append(prev_ver)
-        current_temp = prev_ver
-    fetched_maps = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
-    old_files_map = {}
-    for old_text in reversed(old_texts):
-        for line in old_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 3:
-                file_id = parts[0].strip()
-                try: old_size = int(parts[2])
-                except Exception: old_size = 0
-                old_files_map[file_id] = old_size
-    file_infos = []
-    total_size = 0
-    for line in new_text.splitlines():
-        if not line.strip(): continue
-        parts = line.split(',')
-        if len(parts) < 5: continue
-        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
-        if not file_id or not suffix: continue
-        try: size = int(size_str)
-        except Exception: size = 0
-        if file_id in old_files_map:
-            if old_files_map[file_id] != size: status = "Modified"
-            else: continue
-        else:
-            status = "New"
-        encoded = encode_suffix(suffix)
-        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
-        file_name = file_id.split('/')[-1]
-        token = encode_token(download_url, file_name, 'application/octet-stream')
-        proxy_url = f"/api?action=stream&token={token}"
-        total_size += size
-        file_infos.append({
-            "fileName": file_id,
-            "size": size,
-            "url": proxy_url,
-            "status": status
-        })
-    new_items = []
-    try:
-        new_items = extract_new_game_items(active_version, new_text)
-    except Exception as e:
-        print(f"Error parsing game items hotfix: {e}")
-    return jsonify({
-        "success": True,
-        "version": active_version,
-        "totalSize": total_size,
-        "files": file_infos,
-        "new_items": new_items
-    })
-
-def handle_extractor_response(response):
-    if not response.ok:
-        try: err_data = response.json()
-        except Exception: err_data = {"error": response.text}
-        return jsonify(err_data), response.status_code
-    extractor_data = response.json()
-    assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
-    for asset in assets_list:
-        remote_preview_url = asset.get("preview_url") or asset.get("url")
-        if not remote_preview_url: continue
-        if remote_preview_url.startswith('/'):
-            remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
-        filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
-        detected_content_type = get_mime_type(filename_str)
-        b64_content = asset.get("data", "")
-        file_bytes = base64.b64decode(b64_content) if b64_content else b""
-        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
-        decoded = decode_token(local_cache_token)
-        cache_key = decoded.get("cache_key") if decoded else local_cache_token
-        global MEMORY_ASSET_CACHE
-        MEMORY_ASSET_CACHE[cache_key] = {
-            "content": file_bytes,
-            "filename": filename_str,
-            "content_type": detected_content_type
-        }
-        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
-        if "preview_url" in asset: asset["preview_url"] = local_proxy_route
-        if "url" in asset: asset["url"] = local_proxy_route
-    if "files" not in extractor_data and "assets" in extractor_data:
-        extractor_data["files"] = extractor_data["assets"]
-    elif "assets" not in extractor_data and "files" in extractor_data:
-        extractor_data["assets"] = extractor_data["files"]
-    return jsonify(extractor_data), 200
 
 def process_file_logic():
     bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
@@ -750,6 +654,12 @@ def is_user_allowed(user_id):
         elif isinstance(u, dict) and u.get("user_id") == user_id: return True
     return False
 
+def is_action_permitted(chat_id, user_id):
+    """Bypasses permissions entirely inside the designated allowed Group Chat."""
+    if str(chat_id) == GROUP_ID:
+        return True
+    return is_user_allowed(user_id)
+
 def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
     db = get_db()
     allowed = db.get("allowed_users", [])
@@ -776,7 +686,7 @@ def send_access_request_menu(chat_id, user_id):
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
-    new_text, active_version, base_url = get_file_info_data(version)
+    new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
         return f"❌ Version <b>{version}</b> not found.", None, {}
 
@@ -1119,7 +1029,8 @@ def handle_bot_webhook():
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Request submitted!"}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            if not is_user_allowed(user_id):
+            # Secure action bypass for allowed group chat
+            if not is_action_permitted(chat_id, user_id):
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
@@ -1214,7 +1125,7 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
-                        # Only Extract All as ZIP button allowed for miniupdate version checking as requested
+                        # Modified version summary layout contains only the Extract All as ZIP button (removed file extraction buttons)
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1398,15 +1309,7 @@ def handle_bot_webhook():
                                 "reply_markup": {"inline_keyboard": keyboard}
                             }, timeout=10)
                         else:
-                            keyboard = [[{"text": "⬅️ Back", "callback_data": f"ext_spec_{mapping_id}"}]]
-                            url = f"{TELEGRAM_API}/editMessageText"
-                            http_session.post(url, json={
-                                "chat_id": chat_id,
-                                "message_id": msg_id,
-                                "text": f"❌ Failed extracting <b>{fname}</b>: file data empty.",
-                                "parse_mode": "HTML",
-                                "reply_markup": {"inline_keyboard": keyboard}
-                            }, timeout=10)
+                            send_message(chat_id, "❌ Target subfile does not contain data.")
                     else:
                         http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Out of bounds index."}, timeout=5)
                 else:
@@ -1480,7 +1383,7 @@ def handle_bot_webhook():
 
             # Access controls for private interaction commands
             if raw_text.startswith("/"):
-                if not is_user_allowed(user_id):
+                if not is_action_permitted(chat_id, user_id):
                     if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract") or raw_text.startswith("/admin"):
                         send_access_request_menu(chat_id, user_id)
                     return jsonify({"status": "ok"}), 200
