@@ -803,7 +803,7 @@ def run_miniupdate_extraction_details(version):
                 old_files_map[file_id] = sz
 
     file_entries = []
-    total_size = 0
+    total_size = 0 # Sum of only updated (Modified + New) files as clarified by the user
     new_files_count = 0
     changed_files_count = 0
 
@@ -815,17 +815,16 @@ def run_miniupdate_extraction_details(version):
         try: size = int(size_str)
         except Exception: size = 0
         
-        # Calculate statistics based on all discovered files of the miniupdate
-        total_size += size
-        
         if file_id in old_files_map:
             if old_files_map[file_id] != size: 
                 status = "Modified"
                 changed_files_count += 1
+                total_size += size
                 file_entries.append((file_id, status, size))
         else: 
             status = "New"
             new_files_count += 1
+            total_size += size
             file_entries.append((file_id, status, size))
 
     size_mb = round(total_size / (1024 * 1024), 2)
@@ -868,7 +867,7 @@ def run_miniupdate_extraction_details(version):
         msg.append("├ ✨ NEW GAME ITEMS:")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            # Emphasize linked name and italicized mono ID layout
+            # Emphasize linked name and italicized mono ID layout (removed brackets)
             msg.append(f"│ ▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
             msg.append(f"│       ID: <code><i>{item['id']}</i></code>")
         if len(new_items) > 12:
@@ -876,7 +875,7 @@ def run_miniupdate_extraction_details(version):
 
     msg.append("╰──────────────────────")
     
-    # Store mappings of first 5 changed files for in-place extraction execution
+    # Store dynamic mapping for quick-extraction inline buttons
     db = get_db()
     temp_maps = db.setdefault("temp_mappings", {})
     file_keyboard_mappings = {}
@@ -1215,11 +1214,8 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
+                        # Only Extract All as ZIP button allowed for miniupdate version checking as requested
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                        # Quick extraction choices for changed files
-                        for fid, mapping_id in list(file_keyboard_mappings.items())[:5]:
-                            short_name = fid.split('/')[-1]
-                            keyboard.append([{"text": f"🔍 Extract: {short_name}", "callback_data": f"ext_bnd_{mapping_id}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
@@ -1366,9 +1362,7 @@ def handle_bot_webhook():
                 parts = data.split("_")
                 mapping_id = parts[1]
                 idx = int(parts[2])
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Downloading specific asset..."}, timeout=5)
-                clear_reply_markup(chat_id, msg_id)
-
+                
                 db = get_db()
                 meta = db.get("temp_mappings", {}).get(mapping_id)
                 if meta:
@@ -1377,15 +1371,46 @@ def handle_bot_webhook():
                     if 0 <= idx < len(sub_files):
                         sf = sub_files[idx]
                         fname = sf.get("name") or sf.get("fileName")
+                        
+                        # Edit current inline menu to show "Extracting" status
+                        url = f"{TELEGRAM_API}/editMessageText"
+                        http_session.post(url, json={
+                            "chat_id": chat_id,
+                            "message_id": msg_id,
+                            "text": f"⏳ Extracting asset file: <b>{fname}</b>...",
+                            "parse_mode": "HTML"
+                        }, timeout=10)
+                        
                         b64 = sf.get("data", "")
                         if b64:
-                            send_extracted_document_to_chat(chat_id, base64.b64decode(b64), fname)
+                            file_bytes = base64.b64decode(b64)
+                            # Deliver extracted raw document to Telegram
+                            send_extracted_document_to_chat(chat_id, file_bytes, fname)
+                            
+                            # Edit current active card state to a success confirmation with back buttons
+                            keyboard = [[{"text": "⬅️ Back to Files List", "callback_data": f"ext_spec_{mapping_id}"}]]
+                            url = f"{TELEGRAM_API}/editMessageText"
+                            http_session.post(url, json={
+                                "chat_id": chat_id,
+                                "message_id": msg_id,
+                                "text": f"✅ Successfully extracted and sent: <b>{fname}</b>",
+                                "parse_mode": "HTML",
+                                "reply_markup": {"inline_keyboard": keyboard}
+                            }, timeout=10)
                         else:
-                            send_message(chat_id, "❌ Target subfile does not contain data.")
+                            keyboard = [[{"text": "⬅️ Back", "callback_data": f"ext_spec_{mapping_id}"}]]
+                            url = f"{TELEGRAM_API}/editMessageText"
+                            http_session.post(url, json={
+                                "chat_id": chat_id,
+                                "message_id": msg_id,
+                                "text": f"❌ Failed extracting <b>{fname}</b>: file data empty.",
+                                "parse_mode": "HTML",
+                                "reply_markup": {"inline_keyboard": keyboard}
+                            }, timeout=10)
                     else:
-                        send_message(chat_id, "❌ Out of bounds index.")
+                        http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Out of bounds index."}, timeout=5)
                 else:
-                    send_message(chat_id, "❌ Session expired.")
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Session expired."}, timeout=5)
 
             elif data.startswith("back_ext_"):
                 mapping_id = data.replace("back_ext_", "")
@@ -1494,11 +1519,8 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
+                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                        # Quick extraction choices for changed files
-                        for fid, mapping_id in list(file_keyboard_mappings.items())[:5]:
-                            short_name = fid.split('/')[-1]
-                            keyboard.append([{"text": f"🔍 Extract: {short_name}", "callback_data": f"ext_bnd_{mapping_id}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
                     payload = {
@@ -1548,7 +1570,7 @@ def handle_bot_webhook():
                                         }
                                         save_db(db)
                                         
-                                        sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
+                                        sub_names = "\n".join([f"│ ▫️ {idx}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
                                         if len(sub_files) > 15:
                                             sub_names += f"\n│ ▫️ ... and {len(sub_files) - 15} more files."
                                             
