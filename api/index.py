@@ -41,7 +41,6 @@ MEMORY_ASSET_CACHE = {}
 
 # Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
-PURGED_LEGACY_DB = False
 
 def get_mime_type(filename):
     mime, _ = mimetypes.guess_type(filename)
@@ -160,6 +159,32 @@ def get_multiple_file_info_data(versions):
         if v in FILE_INFO_CACHE:
             results[v] = FILE_INFO_CACHE[v]
     return results
+
+def find_latest_active_version(requested_version):
+    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
+    candidates = [requested_version]
+    for step in [1, 2, 3]:
+        nxt = get_next_version(requested_version, step)
+        if nxt:
+            candidates.append(nxt)
+            
+    fetched = get_multiple_file_info_data(candidates)
+    
+    for cand in reversed(candidates):
+        if cand in fetched:
+            return fetched[cand]
+            
+    current_temp = requested_version
+    for _ in range(5):
+        prev = get_previous_version(current_temp)
+        if not prev:
+            break
+        exact_fetched = get_multiple_file_info_data([prev])
+        if prev in exact_fetched:
+            return exact_fetched[prev]
+        current_temp = prev
+        
+    return None, None, None
 
 def get_extracted_files(file_id, new_text, active_version, base_url):
     cache_key = f"{active_version}:{file_id}"
@@ -690,26 +715,24 @@ def bulk_zip_logic(version):
 # ==========================================
 
 def is_action_permitted(chat_id, user_id):
-    # 1. Owner is always allowed
+    # Owner is always allowed
     if user_id == OWNER_ID:
-        return True
-    # 2. Anyone inside the allowed group chat is allowed
+         return True
+    # Anyone inside the designated allowed Group Chat is allowed
     if str(chat_id) == GROUP_ID:
         return True
-    # 3. Explicitly allowed users (via approved requests stored in Owner's DB) are allowed in private chat
+    # Explicitly allowed users (via approved requests stored in Owner's DB) are allowed in private chat
     db = get_db()
     for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id:
-            return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id:
-            return True
+        if isinstance(u, int) and u == user_id: return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
     return False
 
 def purge_database_messages():
     global PURGED_LEGACY_DB
     if PURGED_LEGACY_DB:
         return
-    # Explicitly delete any old database storage pins from the Group chat
+    # Explicitly delete any old database storage pins from the Group chat only
     for chat in [GROUP_ID]:
         try:
             res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat}, timeout=8).json()
@@ -743,10 +766,10 @@ def get_db():
             owner_db.pop(k, None)
             needs_write = True
             
-    if "allowed_users" not in owner_db:
+    if "allowed_users" not in owner_db: 
         owner_db["allowed_users"] = [OWNER_ID]
         needs_write = True
-    if "pending_requests" not in owner_db:
+    if "pending_requests" not in owner_db: 
         owner_db["pending_requests"] = []
         needs_write = True
         
@@ -1090,7 +1113,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": sent_msg_id,
+                        "message_id": msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
@@ -1255,7 +1278,15 @@ def handle_bot_webhook():
                                 "reply_markup": {"inline_keyboard": keyboard}
                             }, timeout=10)
                         else:
-                            send_message(chat_id, "❌ Target subfile does not contain data.")
+                            keyboard = [[{"text": "⬅️ Back", "callback_data": f"ext_spec_{mapping_id}"}]]
+                            url = f"{TELEGRAM_API}/editMessageText"
+                            http_session.post(url, json={
+                                "chat_id": chat_id,
+                                "message_id": msg_id,
+                                "text": f"❌ Failed extracting <b>{fname}</b>: file data empty.",
+                                "parse_mode": "HTML",
+                                "reply_markup": {"inline_keyboard": keyboard}
+                            }, timeout=10)
                     else:
                         http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Out of bounds index."}, timeout=5)
                 else:
