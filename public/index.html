@@ -355,12 +355,39 @@ function copyItemInfo(id, name) {
     });
 }
 
+function resetOutputWorkspace() {
+    activeCache = [];
+    activeNewItems = [];
+    offlineDataPayloadSessionCache = {};
+    currentPreviewRequestId++; // Revokes all outstanding asynchronous preview loads immediately
+
+    fileList.innerHTML = "";
+    itemList.innerHTML = "";
+    document.getElementById('filesCountTab').innerText = "0";
+    document.getElementById('itemsCountTab').innerText = "0";
+    document.getElementById('cacheCounterText').innerText = "0 elements identified";
+
+    document.getElementById('listActions').classList.add('hidden');
+    document.getElementById("packageTabs").classList.add("hidden");
+
+    cleanPreviousMediaTracks();
+
+    document.getElementById('previewFallback').classList.remove('hidden');
+    document.getElementById('previewContent').classList.add('hidden');
+    document.getElementById('mediaBox').innerHTML = "";
+    document.getElementById('mediaTitle').innerText = "Asset File";
+    document.getElementById('mediaTypeLabel').innerText = "Type";
+}
+
 extractBtn.onclick = async () => {
     let targetVersion = (activeMode === 'auto') ? preCalculatedAutoVersion : inputVersion.value.trim();
     if(!targetVersion || targetVersion === "Offline" || targetVersion === "Error") {
         document.getElementById('statusDescText').innerText = "Please specify a valid target patch version build.";
         return;
     }
+
+    // Instantly reset output workspace visual elements before loading
+    resetOutputWorkspace();
 
     extractBtn.disabled = true;
     btnIcon.className = "fa-solid fa-circle-notch fa-spin text-black";
@@ -375,7 +402,6 @@ extractBtn.onclick = async () => {
     document.getElementById('listLoadingState').classList.remove('hidden');
     fileList.classList.add('hidden');
     itemList.classList.add('hidden');
-    document.getElementById('listActions').classList.add('hidden');
 
     try {
         const res = await fetch(`/api?action=update&version=${encodeURIComponent(targetVersion)}`);
