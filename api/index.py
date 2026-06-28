@@ -10,14 +10,18 @@ import zipfile
 import requests
 import hashlib
 import concurrent.futures
+import urllib3
 from flask import Flask, jsonify, request, Response
+
+# Suppress insecure SSL connection warnings from unofficial target domains
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Web & Tracking Configuration
 DOMAINS = [
     'https://dl-tata.freefireind.in/live/ABHotUpdates/android/',
     'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 ]
-BASE_URL = DOMAINS[0] # Default Fallback Base
+BASE_URL = DOMAINS[0] 
 VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract"
 
@@ -108,7 +112,8 @@ def get_file_info_data(version):
     for base in DOMAINS:
         url = f"{base}{version}/fileinfo"
         try:
-            res = http_session.get(url, timeout=4)
+            # Setting verify=False avoids handshake latency issues on custom domains
+            res = http_session.get(url, timeout=2.5, verify=False)
             if res.status_code == 200:
                 val = (res.text, version, base)
                 FILE_INFO_CACHE[version] = val
@@ -116,13 +121,12 @@ def get_file_info_data(version):
         except Exception:
             pass
             
-    # Try fallback previous version
     fallback_ver = get_previous_version(version)
     if fallback_ver:
         for base in DOMAINS:
             url = f"{base}{fallback_ver}/fileinfo"
             try:
-                res = http_session.get(url, timeout=4)
+                res = http_session.get(url, timeout=2.5, verify=False)
                 if res.status_code == 200:
                     val = (res.text, fallback_ver, base)
                     FILE_INFO_CACHE[version] = val
@@ -139,7 +143,7 @@ def get_multiple_file_info_data(versions):
         for base in DOMAINS:
             url = f"{base}{v}/fileinfo"
             try:
-                res = http_session.get(url, timeout=3)
+                res = http_session.get(url, timeout=2.0, verify=False)
                 if res.status_code == 200:
                     return v, (res.text, v, base)
             except Exception:
@@ -178,7 +182,7 @@ def get_extracted_files(file_id, new_text, active_version, base_url):
     try:
         encoded_url = base64.urlsafe_b64encode(download_url.encode('utf-8')).decode('utf-8')
         extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-        res = http_session.get(extractor_url, timeout=30)
+        res = http_session.get(extractor_url, timeout=12, verify=False)
         if res.status_code == 200:
             data = res.json()
             files_list = data.get("files", []) or data.get("assets", [])
@@ -344,7 +348,7 @@ def extract_new_game_items(active_version, new_text):
 
 def latest_version_logic():
     try:
-        res = http_session.get(VERSION_API, timeout=5)
+        res = http_session.get(VERSION_API, timeout=5, verify=False)
         data = res.json()
         if data.get("success") and "remote_version" in data:
             base_ver = data["remote_version"]
@@ -488,7 +492,7 @@ def process_file_logic():
                 'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
             }
             try:
-                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45, verify=False)
                 return handle_extractor_response(response)
             except Exception as e:
                 return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
@@ -496,7 +500,7 @@ def process_file_logic():
         try:
             encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
             extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            response = http_session.get(extractor_url, timeout=45)
+            response = http_session.get(extractor_url, timeout=45, verify=False)
             return handle_extractor_response(response)
         except Exception as e:
             return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
@@ -535,7 +539,7 @@ def stream_cache_logic(token):
     remote_url = decoded.get("url")
     if remote_url:
         try:
-            res = http_session.get(remote_url, timeout=15)
+            res = http_session.get(remote_url, timeout=15, verify=False)
             if res.status_code == 200:
                 if cache_key:
                     MEMORY_ASSET_CACHE[cache_key] = {
@@ -560,7 +564,7 @@ def extract_zip_logic(token):
     encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
     extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}&download_type=zip"
     try:
-        res = http_session.get(extractor_url, timeout=60, stream=True)
+        res = http_session.get(extractor_url, timeout=60, stream=True, verify=False)
         if res.status_code == 200:
             filename = decoded.get("filename", "extracted_asset") + ".zip"
             def generate():
@@ -622,7 +626,7 @@ def bulk_zip_logic(version):
         try:
             encoded_url = base64.urlsafe_b64encode(d_url.encode('utf-8')).decode('utf-8')
             extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            res = http_session.get(extractor_url, timeout=25)
+            res = http_session.get(extractor_url, timeout=25, verify=False)
             if res.status_code == 200:
                 data = res.json()
                 return file_id, data.get("files", []) or data.get("assets", [])
@@ -640,7 +644,7 @@ def bulk_zip_logic(version):
                     if b64_content and fname:
                         try:
                             file_bytes = base64.b64decode(b64_content)
-                            zf.writestr(f"{file_id}_extracted/{zpath}", file_bytes)
+                            zf.writestr(zpath, file_bytes)
                             files_added_to_zip += 1
                         except Exception: pass
     if files_added_to_zip == 0: return "No assets could be extracted for this version update", 400
@@ -659,7 +663,7 @@ def send_message(chat_id, text, parse_mode=None):
     if parse_mode:
         payload["parse_mode"] = parse_mode
     try:
-        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10, verify=False)
         return res.json()
     except Exception as e:
         print(f"Telegram send error: {e}")
@@ -670,13 +674,13 @@ def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
     if parse_mode:
         payload["parse_mode"] = parse_mode
     try:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10, verify=False)
     except Exception as e:
          print(f"Telegram menu send error: {e}")
 
 def read_db_from_chat(chat_id):
     try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10, verify=False).json()
         if res.get("ok") and "pinned_message" in res["result"]:
             text = res["result"]["pinned_message"].get("text", "")
             if "📦 DATABASE STORAGE" in text:
@@ -692,7 +696,7 @@ def read_db_from_chat(chat_id):
 def write_db_to_chat(chat_id, db_dict):
     db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
     try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10, verify=False).json()
         if res.get("ok") and "pinned_message" in res["result"]:
             msg = res["result"]["pinned_message"]
             if "📦 DATABASE STORAGE" in msg.get("text", ""):
@@ -700,7 +704,7 @@ def write_db_to_chat(chat_id, db_dict):
                     "chat_id": chat_id,
                     "message_id": msg["message_id"],
                     "text": db_text
-                }, timeout=10)
+                }, timeout=10, verify=False)
                 return
         new_msg = send_message(chat_id, db_text)
         if new_msg and new_msg.get("ok"):
@@ -709,7 +713,7 @@ def write_db_to_chat(chat_id, db_dict):
                 "chat_id": chat_id,
                 "message_id": msg_id,
                 "disable_notification": True
-            }, timeout=10)
+            }, timeout=10, verify=False)
     except Exception as e:
          print(f"DB write warning: {e}")
 
@@ -720,12 +724,12 @@ def get_db():
         if owner_db:
             write_db_to_chat(OWNER_ID, owner_db)
             try:
-                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
+                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10, verify=False).json()
                 if res.get("ok") and "pinned_message" in res["result"]:
                     msg = res["result"]["pinned_message"]
                     if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10, verify=False)
+                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10, verify=False)
             except Exception: pass
     if not owner_db:
         return {
@@ -779,9 +783,9 @@ def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission."""
     new_text, active_version, base_url = get_file_info_data(version)
     if not new_text:
-        return f"❌ Version {version} not found.", None, []
+        return "❌ Invalid version", None, []
 
-    prev_ver = get_previous_version(version)
+    prev_ver = get_previous_version(active_version)
     old_text = ""
     if prev_ver:
         prev_res = get_file_info_data(prev_ver)
@@ -800,6 +804,9 @@ def run_miniupdate_extraction_details(version):
 
     file_entries = []
     total_size = 0
+    changed_count = 0
+    new_count = 0
+    
     for line in new_text.splitlines():
         if not line.strip(): continue
         parts = line.split(',')
@@ -807,10 +814,17 @@ def run_miniupdate_extraction_details(version):
         file_id, size_str = parts[0].strip(), parts[2].strip()
         try: size = int(size_str)
         except Exception: size = 0
+        
         if file_id in old_files_map:
-            if old_files_map[file_id] != size: status = "Modified"
-            else: continue
-        else: status = "New"
+            if old_files_map[file_id] != size:
+                status = "Modified"
+                changed_count += 1
+            else:
+                continue
+        else:
+            status = "New"
+            new_count += 1
+            
         total_size += size
         file_entries.append((file_id, status, size))
 
@@ -818,14 +832,15 @@ def run_miniupdate_extraction_details(version):
     
     msg = [
         "╭─📊 MINIUPDATE ANALYSIS ────",
-        f"├ 🟢 Version Extracted: {version}",
-        f"├ Total Size: {size_mb} MB",
-        f"├ Changed Files Count: {len(file_entries)}",
+        "│",
+        f"├ 🟢 Version Extracted: {active_version}",
+        f"├ MiniUpdate Size: {size_mb} MB",
+        f"├ Changed Files Count: {changed_count}",
+        f"├ New Files Count: {new_count}",
         "│",
         "├ 📂 DISCOVERED FILES:"
     ]
     
-    # Truncate lists to fit within Telegram's 4096 character message limit
     max_visible_files = 15
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
         sz_kb = round(sz / 1024, 1)
@@ -836,7 +851,7 @@ def run_miniupdate_extraction_details(version):
 
     new_items = []
     try:
-        new_items = extract_new_game_items(version, new_text)
+        new_items = extract_new_game_items(active_version, new_text)
     except Exception: pass
 
     if new_items:
@@ -844,7 +859,6 @@ def run_miniupdate_extraction_details(version):
         msg.append("├ ✨ NEW GAME ITEMS:")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('[', '').replace(']', '').replace('(', '').replace(')', '')
-            # Premium click-to-view Icon links
             msg.append(f"│ ▫️ [{clean_name} ({item['id']})]({item['icon_url']})")
         if len(new_items) > 12:
             msg.append(f"│ ▫️ ... and {len(new_items) - 12} more items.")
@@ -856,10 +870,10 @@ def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=
     try:
         if is_local_upload and upload_bytes:
             files = {'asset_bundle': (filename, upload_bytes, 'application/octet-stream')}
-            res = http_session.post(EXTRACTOR_API_URL, files=files, timeout=45)
+            res = http_session.post(EXTRACTOR_API_URL, files=files, timeout=45, verify=False)
         else:
             encoded_url = base64.urlsafe_b64encode(file_path_or_url.encode('utf-8')).decode('utf-8')
-            res = http_session.get(f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}", timeout=45)
+            res = http_session.get(f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}", timeout=45, verify=False)
         
         if res.status_code == 200:
             data = res.json()
@@ -873,7 +887,7 @@ def send_extracted_document_to_chat(chat_id, file_bytes, filename):
     files = {"document": (filename, file_bytes, 'application/octet-stream')}
     payload = {"chat_id": chat_id}
     try:
-        http_session.post(url, data=payload, files=files, timeout=45)
+        http_session.post(url, data=payload, files=files, timeout=45, verify=False)
     except Exception as e:
          print(f"Error sending document: {e}")
 
@@ -885,13 +899,13 @@ def clear_reply_markup(chat_id, message_id):
         "reply_markup": {"inline_keyboard": []}
     }
     try:
-        http_session.post(url, json=payload, timeout=5)
+        http_session.post(url, json=payload, timeout=5, verify=False)
     except Exception: pass
 
 def delete_message(chat_id, message_id):
     url = f"{TELEGRAM_API}/deleteMessage"
     try:
-        http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
+        http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5, verify=False)
     except Exception: pass
 
 def send_admin_main_menu(chat_id, message_id=None):
@@ -909,9 +923,9 @@ def send_admin_main_menu(chat_id, message_id=None):
         "╰──────────────────────"
     )
     if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
     else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
 
 def send_admin_pending_view(chat_id, message_id=None):
     db = get_db()
@@ -929,9 +943,9 @@ def send_admin_pending_view(chat_id, message_id=None):
     keyboard.append([{"text": "⬅️ Back to Admin Panel", "callback_data": "admin_main"}])
     reply_markup = {"inline_keyboard": keyboard}
     if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
     else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
 
 def send_admin_pending_manage(chat_id, target_uid, message_id=None):
     db = get_db()
@@ -963,9 +977,9 @@ def send_admin_pending_manage(chat_id, target_uid, message_id=None):
         ]
     reply_markup = {"inline_keyboard": keyboard}
     if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
     else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
 
 def send_admin_users_view(chat_id, message_id=None):
     db = get_db()
@@ -989,9 +1003,9 @@ def send_admin_users_view(chat_id, message_id=None):
     keyboard.append([{"text": "⬅️ Back to Admin Panel", "callback_data": "admin_main"}])
     reply_markup = {"inline_keyboard": keyboard}
     if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
     else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
 
 def send_user_management_view(chat_id, target_id, message_id=None):
     db = get_db()
@@ -1014,9 +1028,9 @@ def send_user_management_view(chat_id, target_id, message_id=None):
     ]
     reply_markup = {"inline_keyboard": keyboard}
     if message_id:
-        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
     else:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10, verify=False)
 
 @app.route('/api/webhook', methods=['POST'])
 def handle_bot_webhook():
@@ -1033,10 +1047,9 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
-            # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
 
             if data.startswith("req_access_"):
@@ -1059,47 +1072,46 @@ def handle_bot_webhook():
                         "╰──────────────────────"
                     ), parse_mode="Markdown")
                 
-                # Edit requester's button feedback state
                 http_session.post(f"{TELEGRAM_API}/editMessageText", json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
                     "text": "Please Give me Access 🙏\n\n*(Access request sent to the owner, waiting for approval...)*",
                     "parse_mode": "Markdown"
-                }, timeout=10)
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Request submitted!"}, timeout=5)
+                }, timeout=10, verify=False)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Request submitted!"}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
 
             if not is_user_allowed(user_id):
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
 
-            # Admin Navigation callbacks
+            # Admin Navigation Callbacks
             if data == "admin_main":
                 if user_id == OWNER_ID:
                     send_admin_main_menu(chat_id, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
             elif data == "admin_view_users":
                 if user_id == OWNER_ID:
                     send_admin_users_view(chat_id, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
             elif data == "admin_view_pending":
                 if user_id == OWNER_ID:
                     send_admin_pending_view(chat_id, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
             elif data.startswith("admin_manage_pending_"):
                 if user_id == OWNER_ID:
                     target_uid = int(data.split("_")[-1])
                     send_admin_pending_manage(chat_id, target_uid, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
             elif data.startswith("admin_manage_user_"):
                 if user_id == OWNER_ID:
                     target_uid = int(data.split("_")[-1])
                     send_user_management_view(chat_id, target_uid, msg_id)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5, verify=False)
                 return jsonify({"status": "ok"}), 200
 
             elif data.startswith("auth_approve_"):
@@ -1115,12 +1127,12 @@ def handle_bot_webhook():
                             username = p.get("username", "None")
                             break
                     add_allowed_user(target_id, first_name, username)
-                    db = get_db() # Reload DB
+                    db = get_db()
                     db["pending_requests"] = [p for p in db.get("pending_requests", []) if p["user_id"] != target_id]
                     save_db(db)
                     
-                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"✅ User {target_id} APPROVED."}, timeout=10)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "User approved!"}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"✅ User {target_id} APPROVED."}, timeout=10, verify=False)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "User approved!"}, timeout=5, verify=False)
                     send_message(target_id, "You have been granted access to the bot! 🎉\nUse /start to begin.")
                 return jsonify({"status": "ok"}), 200
 
@@ -1130,8 +1142,8 @@ def handle_bot_webhook():
                     db = get_db()
                     db["pending_requests"] = [p for p in db.get("pending_requests", []) if p["user_id"] != target_id]
                     save_db(db)
-                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"❌ User {target_id} REJECTED."}, timeout=10)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "User rejected."}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"❌ User {target_id} REJECTED."}, timeout=10, verify=False)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "User rejected."}, timeout=5, verify=False)
                     send_message(target_id, "Your request was declined by the administrator.")
                 return jsonify({"status": "ok"}), 200
 
@@ -1141,29 +1153,27 @@ def handle_bot_webhook():
                     db = get_db()
                     db["allowed_users"] = [u for u in db.get("allowed_users", []) if (isinstance(u, int) and u != target_id) or (isinstance(u, dict) and u.get("user_id") != target_id)]
                     save_db(db)
-                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"🚫 User {target_id} REVOKED."}, timeout=10)
-                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access revoked!"}, timeout=5)
+                    http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"🚫 User {target_id} REVOKED."}, timeout=10, verify=False)
+                    http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access revoked!"}, timeout=5, verify=False)
                     send_message(target_id, "Your bot access has been revoked by the administrator.")
                 return jsonify({"status": "ok"}), 200
 
             # Extraction actions
             elif data.startswith("check_ver_"):
                 ver = data.replace("check_ver_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Parsing version maps..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Parsing version maps..."}, timeout=5, verify=False)
                 
-                # Delete active trigger buttons as requested
                 clear_reply_markup(chat_id, msg_id)
 
                 detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
                 keyboard = []
                 if file_entries:
                     keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
                 send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="Markdown")
 
             elif data.startswith("zip_ver_"):
                 ver = data.replace("zip_ver_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Preparing ZIP archive..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Preparing ZIP archive..."}, timeout=5, verify=False)
                 clear_reply_markup(chat_id, msg_id)
                 send_message(chat_id, "⚙️ Generating patch extraction package. Please stand by...")
                 
@@ -1175,7 +1185,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_all_"):
                 mapping_id = data.replace("ext_all_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Bundling archives..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Bundling archives..."}, timeout=5, verify=False)
                 clear_reply_markup(chat_id, msg_id)
                 
                 db = get_db()
@@ -1201,7 +1211,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_spec_"):
                 mapping_id = data.replace("ext_spec_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Retrieving specific files list..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Retrieving specific files list..."}, timeout=5, verify=False)
                 clear_reply_markup(chat_id, msg_id)
                 
                 db = get_db()
@@ -1211,13 +1221,11 @@ def handle_bot_webhook():
                     sub_files = parse_bundle_subfiles(target_url)
                     if sub_files:
                         keyboard = []
-                        # Limit specific downloads to top 15 components to avoid huge inline keyboards
                         for idx, sf in enumerate(sub_files[:15], 1):
                             fname = sf.get("name") or sf.get("fileName")
                             keyboard.append([{"text": f"📥 {idx}. {fname}", "callback_data": f"dlf_{mapping_id}_{idx-1}"}])
                         keyboard.append([
-                            {"text": "⬅️ Back", "callback_data": f"back_ext_{mapping_id}"},
-                            {"text": "❌ Close", "callback_data": "cb_close"}
+                            {"text": "⬅️ Back", "callback_data": f"back_ext_{mapping_id}"}
                         ])
                         send_message_with_keyboard(chat_id, "👇 Click on any file to download it directly:", {"inline_keyboard": keyboard})
                     else:
@@ -1229,7 +1237,7 @@ def handle_bot_webhook():
                 parts = data.split("_")
                 mapping_id = parts[1]
                 idx = int(parts[2])
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Downloading specific asset..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Downloading specific asset..."}, timeout=5, verify=False)
                 
                 db = get_db()
                 meta = db.get("temp_mappings", {}).get(mapping_id)
@@ -1251,7 +1259,7 @@ def handle_bot_webhook():
 
             elif data.startswith("back_ext_"):
                 mapping_id = data.replace("back_ext_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5, verify=False)
                 
                 db = get_db()
                 meta = db.get("temp_mappings", {}).get(mapping_id)
@@ -1267,8 +1275,6 @@ def handle_bot_webhook():
                     keyboard = [[
                         {"text": "📦 Extract All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
                         {"text": "🔍 Extract Specific File", "callback_data": f"ext_spec_{mapping_id}"}
-                    ], [
-                        {"text": "❌ Close Viewport", "callback_data": "cb_close"}
                     ]]
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1284,7 +1290,7 @@ def handle_bot_webhook():
                             "╰─────────────────────────"
                         ),
                         "reply_markup": {"inline_keyboard": keyboard}
-                    }, timeout=10)
+                    }, timeout=10, verify=False)
                 else:
                     send_message(chat_id, "❌ Session expired.")
 
@@ -1300,22 +1306,21 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching
-            if raw_text and ("dl.tata.freefiremobile.com/live/ABHotUpdates" in raw_text or "dl-tata.freefireind.in" in raw_text):
+            # Live fileinfo URL hook matching and automatic version checking
+            if raw_text and ("dl.tata.freefiremobile.com/live/ABHotUpdates" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text):
                 version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
                 if version_match:
                     ver = version_match.group(1)
-                    keyboard = [[{"text": f"🔍 Check Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
-                    send_message_with_keyboard(chat_id, (
-                        "╭──────────────────────\n"
-                        "├ 🟢 LIVE VERSION DETECTED\n"
-                        "│\n"
-                        f"├ Target Version: {ver}\n"
-                        "╰──────────────────────"
-                    ), {"inline_keyboard": keyboard})
+                    
+                    # Run target version checking automatically
+                    detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
+                    keyboard = []
+                    if file_entries:
+                        keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
+                    send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="Markdown")
                     return jsonify({"status": "ok"}), 200
 
-            # Access controls for private interaction commands
+            # Access controls for private commands
             if raw_text.startswith("/"):
                 if not is_user_allowed(user_id):
                     if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract") or raw_text.startswith("/admin"):
@@ -1348,7 +1353,6 @@ def handle_bot_webhook():
                 keyboard = []
                 if file_entries:
                     keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
                 send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="Markdown")
 
             elif raw_text.startswith("/extract"):
@@ -1360,14 +1364,14 @@ def handle_bot_webhook():
                         file_name = media.get("file_name", "bundle.unity3d")
                         send_message(chat_id, f"📥 Downloading '{file_name}' from Telegram...")
                         
-                        path_res = http_session.get(f"{TELEGRAM_API}/getFile?file_id={file_id}", timeout=10).json()
+                        path_res = http_session.get(f"{TELEGRAM_API}/getFile?file_id={file_id}", timeout=10, verify=False).json()
                         if path_res.get("ok"):
                             file_path = path_res["result"]["file_path"]
                             dl_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
                             
                             send_message(chat_id, "⚙️ Processing bundle extraction pipeline...")
                             try:
-                                res = http_session.get(dl_url, timeout=45)
+                                res = http_session.get(dl_url, timeout=45, verify=False)
                                 if res.status_code == 200:
                                     sub_files = parse_bundle_subfiles(None, is_local_upload=True, upload_bytes=res.content, filename=file_name)
                                     if sub_files:
@@ -1386,8 +1390,6 @@ def handle_bot_webhook():
                                         keyboard = [[
                                             {"text": "📦 Extract All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
                                             {"text": "🔍 Extract Specific File", "callback_data": f"ext_spec_{mapping_id}"}
-                                        ], [
-                                            {"text": "❌ Close Viewport", "callback_data": "cb_close"}
                                         ]]
                                         send_message_with_keyboard(chat_id, (
                                             "╭─📦 BUNDLE EXTRACTION ────\n"
