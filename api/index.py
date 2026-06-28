@@ -39,6 +39,9 @@ FILE_INFO_CACHE = {}
 EXTRACTED_FILES_CACHE = {}
 MEMORY_ASSET_CACHE = {}
 
+# Stateless short-lived in-memory mappings to stop pinned database spam
+BOT_TEMP_MAPPINGS = {}
+
 def get_mime_type(filename):
     mime, _ = mimetypes.guess_type(filename)
     if mime:
@@ -366,24 +369,6 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
-def latest_version_logic():
-    try:
-        res = http_session.get(VERSION_API, timeout=5)
-        data = res.json()
-        if data.get("success") and "remote_version" in data:
-            base_ver = data["remote_version"]
-            parts = list(map(int, base_ver.split('.')))
-            parts[2] += 1
-            calculated_target = ".".join(map(str, parts))
-            return jsonify({
-                "success": True, 
-                "current_version": base_ver, 
-                "target_version": calculated_target
-            })
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    return jsonify({"success": False, "message": "Failed response lookup."}), 500
-
 def check_update_logic():
     input_val = request.args.get('version', '').strip()
     if not input_val:
@@ -495,45 +480,6 @@ def handle_extractor_response(response):
         extractor_data["assets"] = extractor_data["files"]
     return jsonify(extractor_data), 200
 
-def process_file_logic():
-    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
-    token = request.args.get('token', '') or request.form.get('token', '')
-    real_bundle_url = ""
-    if "token=" in bundle_url:
-        token_match = re.search(r'token=([^&]+)', bundle_url)
-        if token_match:
-            tok = token_match.group(1)
-            decoded = decode_token(tok)
-            if decoded: real_bundle_url = decoded.get("url", "")
-    elif token:
-        decoded = decode_token(token)
-        if decoded: real_bundle_url = decoded.get("url", "")
-    if not real_bundle_url and bundle_url.startswith("http"):
-        real_bundle_url = bundle_url
-    if 'file' in request.files:
-        uploaded_file = request.files['file']
-        if uploaded_file.filename != '':
-            files = {
-                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
-            }
-            data = {
-                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
-            }
-            try:
-                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
-                return handle_extractor_response(response)
-            except Exception as e:
-                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
-    if real_bundle_url:
-        try:
-            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
-            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            response = http_session.get(extractor_url, timeout=45)
-            return handle_extractor_response(response)
-        except Exception as e:
-            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
-    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
-
 def stream_cache_logic(token):
     if not token: return "Missing token query parameter", 400
     decoded = decode_token(token)
@@ -590,7 +536,7 @@ def extract_zip_logic(token):
     remote_url = decoded.get("url")
     if not remote_url: return "Target bundle address missing in decrypted token payload", 400
     encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
-    extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}&download_type=zip"
+    extractor_url = f"{EXTRACTOR_API_URL}&download_type=zip"
     try:
         res = http_session.get(extractor_url, timeout=60, stream=True)
         if res.status_code == 200:
@@ -764,12 +710,10 @@ def get_db():
             "allowed_users": [OWNER_ID], 
             "pending_requests": [],
             "rejection_sticker": None,
-            "owner_state": None,
-            "temp_mappings": {}
+            "owner_state": None
         }
     if "allowed_users" not in owner_db: owner_db["allowed_users"] = [OWNER_ID]
     if "pending_requests" not in owner_db: owner_db["pending_requests"] = []
-    if "temp_mappings" not in owner_db: owner_db["temp_mappings"] = {}
     return owner_db
 
 def save_db(db):
@@ -892,8 +836,9 @@ def run_miniupdate_extraction_details(version):
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
-        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>  ")
-        msg.append(f"             <i>({stat}, {sz_display})</i>")
+        # Removed vertical guides inside blockquote block to prevent double border lines
+        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
+        msg.append(f"      <i>({stat}, {sz_display})</i>")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
@@ -912,18 +857,15 @@ def run_miniupdate_extraction_details(version):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             # Emphasize linked name and italicized mono ID layout (removed brackets)
             msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
-            msg.append(f"       ID: <code><i>{item['id']}</i></code>")
+            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
         if len(new_items) > 12:
             msg.append(f"... and {len(new_items) - 12} more items.")
         msg.append("</blockquote>")
 
     msg.append("╰──────────────────────")
     
-    # Store dynamic mapping for quick-extraction inline buttons
-    db = get_db()
-    temp_maps = db.setdefault("temp_mappings", {})
+    # Store dynamic mapping in local memory store to prevent database repinning spam
     file_keyboard_mappings = {}
-    
     for file_id, stat, sz in file_entries[:5]:
         mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
         suffix = None
@@ -936,14 +878,13 @@ def run_miniupdate_extraction_details(version):
         if suffix:
             encoded = encode_suffix(suffix)
             download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
-            temp_maps[mapping_id] = {
+            BOT_TEMP_MAPPINGS[mapping_id] = {
                 "url": download_url,
                 "filename": file_id.split('/')[-1],
                 "version": version
             }
             file_keyboard_mappings[file_id] = mapping_id
             
-    save_db(db)
     return "\n".join(msg), file_entries, file_keyboard_mappings
 
 def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=None, filename="bundle.unity3d"):
@@ -1112,7 +1053,53 @@ def send_user_management_view(chat_id, target_id, message_id=None):
     else:
         http_session.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "reply_markup": reply_markup}, timeout=10)
 
-@app.route('/api/webhook', methods=['POST'])
+
+# ==========================================
+# Flask Controller & Universal Path Router
+# ==========================================
+
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
+@app.route('/<path:path>', methods=['GET', 'POST'])
+def handle_all_requests(path):
+    full_path = "/" + path.strip("/")
+    action = request.args.get('action')
+    
+    # Process Webhook requests first
+    if full_path == '/api/webhook' or full_path == '/webhook':
+        return handle_bot_webhook()
+        
+    elif full_path == '/api/process' or full_path == '/process' or action == 'process':
+        return process_file_logic()
+    elif full_path == '/api/latest-version' or full_path == '/latest-version' or action == 'latest-version':
+        return latest_version_logic()
+    elif full_path == '/api/update' or full_path == '/update' or action == 'update':
+        return check_update_logic()
+    elif full_path == '/api/bulk-zip' or full_path == '/bulk-zip' or action == 'bulk-zip':
+        version = request.args.get('version', '').strip()
+        return bulk_zip_logic(version)
+    elif full_path == '/api/extract-zip' or full_path == '/extract-zip' or action == 'extract-zip':
+        token = request.args.get('token')
+        return extract_zip_logic(token)
+    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/'):
+        token = full_path.split('/')[-1]
+        return stream_cache_logic(token)
+    elif action == 'stream':
+        return stream_cache_logic(request.args.get('token'))
+
+    # Serve webpage index file statically
+    if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
+        try:
+            for filename in ['api/index.html', 'public/index.html', 'index.html']:
+                if os.path.exists(filename):
+                    with open(filename, 'r', encoding='utf-8') as f:
+                        return f.read()
+            return jsonify({"success": False, "message": "index.html template missing"}), 404
+        except Exception as e:
+            return f"Error: {str(e)}", 500
+
+    return jsonify({"success": False, "message": f"Endpoint '{full_path}' is unmapped."}), 404
+
+
 def handle_bot_webhook():
     try:
         update = request.get_json()
@@ -1295,8 +1282,7 @@ def handle_bot_webhook():
                 mapping_id = data.replace("ext_bnd_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Extracting bundle files..."}, timeout=5)
                 
-                db = get_db()
-                meta = db.get("temp_mappings", {}).get(mapping_id)
+                meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
                     file_name = meta.get("filename", "bundle.unity3d")
                     target_url = meta.get("url")
@@ -1358,8 +1344,7 @@ def handle_bot_webhook():
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Bundling archives..."}, timeout=5)
                 clear_reply_markup(chat_id, msg_id)
                 
-                db = get_db()
-                meta = db.get("temp_mappings", {}).get(mapping_id)
+                meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
                     target_url = meta.get("url")
                     sub_files = parse_bundle_subfiles(target_url)
@@ -1384,8 +1369,7 @@ def handle_bot_webhook():
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Retrieving specific files list..."}, timeout=5)
                 clear_reply_markup(chat_id, msg_id)
                 
-                db = get_db()
-                meta = db.get("temp_mappings", {}).get(mapping_id)
+                meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
                     target_url = meta.get("url")
                     sub_files = parse_bundle_subfiles(target_url)
@@ -1408,8 +1392,7 @@ def handle_bot_webhook():
                 mapping_id = parts[1]
                 idx = int(parts[2])
                 
-                db = get_db()
-                meta = db.get("temp_mappings", {}).get(mapping_id)
+                meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
                     target_url = meta.get("url")
                     sub_files = parse_bundle_subfiles(target_url)
@@ -1453,11 +1436,11 @@ def handle_bot_webhook():
                 mapping_id = data.replace("back_ext_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5)
                 
-                db = get_db()
-                meta = db.get("temp_mappings", {}).get(mapping_id)
+                meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
                     file_name = meta.get("filename", "bundle.unity3d")
                     target_url = meta.get("url")
+                    ver = meta.get("version", "1.126.6")
                     sub_files = parse_bundle_subfiles(target_url)
                     
                     sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
@@ -1600,12 +1583,12 @@ def handle_bot_webhook():
                                     sub_files = parse_bundle_subfiles(None, is_local_upload=True, upload_bytes=res.content, filename=file_name)
                                     if sub_files:
                                         mapping_id = str(uuid.uuid4())[:8]
-                                        db = get_db()
-                                        db["temp_mappings"][mapping_id] = {
+                                        
+                                        # Save dynamic mapping in local memory store to prevent database repinning spam
+                                        BOT_TEMP_MAPPINGS[mapping_id] = {
                                             "url": dl_url,
                                             "filename": file_name
                                         }
-                                        save_db(db)
                                         
                                         sub_names = "\n".join([f"│ ▫️ {idx}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
                                         if len(sub_files) > 15:
@@ -1640,45 +1623,11 @@ def handle_bot_webhook():
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
 
-# ==========================================
-# Web Dashboard Routes Configuration
-# ==========================================
-
-@app.route('/', methods=['GET', 'POST'])
-@app.route('/api', methods=['GET', 'POST'])
-def handle_all_requests():
-    action = request.args.get('action')
-    path = request.path.rstrip('/')
-    
-    if path == '/api/process' or path == '/process' or action == 'process':
-        return process_file_logic()
-    elif path == '/api/latest-version' or path == '/latest-version' or action == 'latest-version':
-        return latest_version_logic()
-    elif path == '/api/update' or path == '/update' or action == 'update':
-        return check_update_logic()
-    elif path == '/api/bulk-zip' or path == '/bulk-zip' or action == 'bulk-zip':
-        version = request.args.get('version', '').strip()
-        return bulk_zip_logic(version)
-    elif path.startswith('/api/stream-cache/') or path.startswith('/stream-cache/'):
-        token = path.split('/')[-1]
-        return stream_cache_logic(token)
-    elif action == 'stream':
-        return stream_cache_logic(request.args.get('token'))
-    elif path == '/api/extract-zip' or path == '/extract-zip' or action == 'extract-zip':
-        token = request.args.get('token')
-        return extract_zip_logic(token)
-    
-    if request.method == 'GET' and (path == '' or path == '/api'):
-        try:
-            for filename in ['api/index.html','public/index.html', 'index.html']:
-                if os.path.exists(filename):
-                    with open(filename, 'r', encoding='utf-8') as f:
-                        return f.read()
-            return jsonify({"success": False, "message": "index.html template missing"}), 404
-        except Exception as e:
-            return f"Error: {str(e)}", 500
-
-    return jsonify({"success": False, "message": f"Endpoint or Action parameter is unmapped."}), 404
-
-if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+# Serverless cold-start verification fallback loading static landing page inside api scope
+if not os.path.exists('api/index.html') and os.path.exists('public/index.html'):
+    try:
+        os.makedirs('api', exist_ok=True)
+        with open('public/index.html', 'r', encoding='utf-8') as src:
+            with open('api/index.html', 'w', encoding='utf-8') as dst:
+                dst.write(src.read())
+    except Exception: pass
