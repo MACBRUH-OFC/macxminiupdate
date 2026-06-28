@@ -775,10 +775,10 @@ def send_access_request_menu(chat_id, user_id):
     send_message_with_keyboard(chat_id, "╭─❌ ACCESS RESTRICTED\n╰─You don't have access to this bot. Click below to request.", {"inline_keyboard": keyboard})
 
 def run_miniupdate_extraction_details(version):
-    """Processes version changes and formats details for Telegram transmission."""
+    """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
     new_text, active_version, base_url = get_file_info_data(version)
     if not new_text:
-        return f"❌ Version {version} not found.", None, []
+        return f"❌ Version <b>{version}</b> not found.", None, []
 
     prev_versions = []
     current_temp = active_version
@@ -797,10 +797,10 @@ def run_miniupdate_extraction_details(version):
             if not line.strip(): continue
             parts = line.split(',')
             if len(parts) >= 3:
-                fid = parts[0].strip()
+                file_id = parts[0].strip()
                 try: sz = int(parts[2])
                 except Exception: sz = 0
-                old_files_map[fid] = sz
+                old_files_map[file_id] = sz
 
     file_entries = []
     total_size = 0
@@ -831,12 +831,12 @@ def run_miniupdate_extraction_details(version):
     size_mb = round(total_size / (1024 * 1024), 2)
     
     msg = [
-        "╭─📊 MINIUPDATE ANALYSIS ────",
+        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
         "│",
-        f"├ 🟢 Version Extracted: {version}",
-        f"├ MiniUpdate Size: {size_mb} MB",
-        f"├ Changed Files Count: {changed_files_count}",
-        f"├ New Files Count: {new_files_count}",
+        f"├ 🟢 Version Extracted: <b>{version}</b>",
+        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
+        f"├ Changed Files Count: <b>{changed_files_count}</b>",
+        f"├ New Files Count: <b>{new_files_count}</b>",
         "│",
         "├ 📂 DISCOVERED FILES:"
     ]
@@ -844,7 +844,9 @@ def run_miniupdate_extraction_details(version):
     max_visible_files = 15
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
         sz_kb = round(sz / 1024, 1)
-        msg.append(f"│ ▫️ {idx:02d}. {fid} ({stat}, {sz_kb} KB)")
+        # Escape HTML entities so filename symbols do not crash the Telegram HTML parser
+        clean_fid = fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        msg.append(f"│ ▫️ {idx:02d}. {clean_fid} ({stat}, {sz_kb} KB)")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"│ ▫️ ... and {len(file_entries) - max_visible_files} more files.")
@@ -858,8 +860,8 @@ def run_miniupdate_extraction_details(version):
         msg.append("│")
         msg.append("├ ✨ NEW GAME ITEMS:")
         for idx, item in enumerate(new_items[:12], 1):
-            clean_name = item['name'].replace('[', '').replace(']', '').replace('(', '').replace(')', '')
-            msg.append(f"│ ▫️ [{clean_name} ({item['id']})]({item['icon_url']})")
+            clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            msg.append(f"│ ▫️ <a href=\"{item['icon_url']}\">{clean_name} ({item['id']})</a>")
         if len(new_items) > 12:
             msg.append(f"│ ▫️ ... and {len(new_items) - 12} more items.")
 
@@ -1163,23 +1165,24 @@ def handle_bot_webhook():
             # Extraction actions
             elif data.startswith("check_ver_"):
                 ver = data.replace("check_ver_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Parsing version maps..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Comparing patch logs..."}, timeout=5)
                 
-                # Delete active trigger buttons as requested
-                clear_reply_markup(chat_id, msg_id)
-
                 detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
                 keyboard = []
                 if file_entries:
                     keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                 keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
                 
-                # Double-check keyboard is non-empty before passing to reply_markup to prevent API crashes
-                if keyboard and any(keyboard):
-                    send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="Markdown")
-                else:
-                    send_message(chat_id, detail_msg, parse_mode="Markdown")
-
+                # Update current message in-place using HTML parse mode
+                url = f"{TELEGRAM_API}/editMessageText"
+                http_session.post(url, json={
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": detail_msg,
+                    "parse_mode": "HTML",
+                    "reply_markup": {"inline_keyboard": keyboard}
+                }, timeout=10)
+                
             elif data.startswith("zip_ver_"):
                 ver = data.replace("zip_ver_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Preparing ZIP archive..."}, timeout=5)
@@ -1319,16 +1322,15 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching
-            if raw_text and ("dl.tata.freefiremobile.com/live/ABHotUpdates" in raw_text or "dl-tata.freefireind.in" in raw_text):
+            # Live fileinfo URL hook matching (strict format checking for the alert message)
+            if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
                 version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
                 if version_match:
                     ver = version_match.group(1)
                     keyboard = [[{"text": f"🔍 Check Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
                     send_message_with_keyboard(chat_id, (
                         "╭──────────────────────\n"
-                        "├ 🟢 LIVE LINK DETECTED\n"
-                        "│\n"
+                        "├ New MINIUPDATE\n"
                         f"├ Version: {ver}\n"
                         "╰──────────────────────"
                     ), {"inline_keyboard": keyboard})
@@ -1363,17 +1365,19 @@ def handle_bot_webhook():
                     send_message(chat_id, "╭─❌ USAGE\n╰─/check [version]\n\nExample: /check 1.126.6")
                     return jsonify({"status": "ok"}), 200
                 ver = parts[1].strip()
-                detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
-                keyboard = []
-                if file_entries:
-                    keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
-                
-                # Prevent Telegram API crash on empty callback structures
-                if keyboard and any(keyboard):
-                    send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="Markdown")
-                else:
-                    send_message(chat_id, detail_msg, parse_mode="Markdown")
+                try:
+                    detail_msg, file_entries, _ = run_miniupdate_extraction_details(ver)
+                    keyboard = []
+                    if file_entries:
+                        keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
+                    keyboard.append([{"text": "❌ Close Viewport", "callback_data": "cb_close"}])
+                    
+                    if keyboard and any(keyboard):
+                        send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="HTML")
+                    else:
+                        send_message(chat_id, detail_msg, parse_mode="HTML")
+                except Exception as e:
+                    send_message(chat_id, f"❌ Version <b>{ver}</b> not found.")
 
             elif raw_text.startswith("/extract"):
                 if "reply_to_message" in msg:
