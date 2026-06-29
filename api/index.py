@@ -253,7 +253,7 @@ def extract_new_game_items(active_version, new_text):
     if not itemhotfix_id:
         return []
         
-    text_data, active_ver, base_url = get_file_info_data_exact(active_version)
+    text_data, active_ver, base_url = get_file_info_data(active_version)
     if not base_url:
         return []
 
@@ -386,8 +386,8 @@ def latest_version_logic():
             
             return jsonify({
                 "success": True, 
-                "current_version": base_ver, 
-                "target_version": calculated_target
+                "current_version": active_ver, 
+                "target_version": target_ver
             })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -660,3 +660,85 @@ def bulk_zip_logic(version):
     response = Response(zip_io.getvalue(), mimetype='application/zip')
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
+
+
+# ==========================================
+# Flask Controller & Explicit Webhook Routes
+# ==========================================
+
+@app.route('/api/webhook', methods=['GET', 'POST'])
+@app.route('/webhook', methods=['GET', 'POST'])
+def telegram_webhook():
+    if request.method == 'GET':
+        # Dynamic GET diagnostic and webhook registration on Vercel
+        try:
+            host = request.headers.get('Host')
+            protocol = "https" if "localhost" not in host else "http"
+            current_url = f"{protocol}://{host}/api/webhook"
+            
+            # Webhook registration payload
+            webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+            setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
+            
+            # Send test diagnostic startup message to Owner personal chat
+            diagnostic_text = (
+                "<b>🔔 MINIUPDATE BOT ONLINE</b>\n\n"
+                "🟢 Webhook successfully compiled and is active!\n"
+                f"🔗 Webhook Registered: <code>{current_url}</code>\n"
+                f"📦 Telegram Response: <code>{json.dumps(setup_res)}</code>"
+            )
+            send_message(OWNER_ID, diagnostic_text, parse_mode="HTML")
+            
+            return jsonify({
+                "status": "active",
+                "message": "Dynamic Webhook auto-configured! Diagnostic message sent to Owner.",
+                "bot_token": BOT_TOKEN[:10] + "...",
+                "registered_url": current_url,
+                "telegram_webhook_response": setup_res
+            }), 200
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Setup failed: {str(e)}"
+            }), 500
+            
+    # Handle POST (actual webhook updates)
+    return handle_bot_webhook()
+
+@app.route('/api/latest-version', methods=['GET'])
+def api_latest_version():
+    return latest_version_logic()
+
+@app.route('/api/update', methods=['GET'])
+def api_update():
+    return check_update_logic()
+
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
+@app.route('/<path:path>', methods=['GET', 'POST'])
+def handle_all_requests(path):
+    full_path = "/" + path.strip("/")
+    action = request.args.get('action')
+    
+    if full_path == '/api/process' or full_path == '/process' or action == 'process':
+        return process_file_logic()
+    elif full_path == '/api/extract-zip' or full_path == '/extract-zip' or action == 'extract-zip':
+        token = request.args.get('token')
+        return extract_zip_logic(token)
+    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/'):
+        token = full_path.split('/')[-1]
+        return stream_cache_logic(token)
+    elif action == 'stream':
+        return stream_cache_logic(request.args.get('token'))
+
+    # Serve webpage index file statically
+    if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
+        try:
+            for filename in ['api/index.html', 'public/index.html', 'index.html']:
+                if os.path.exists(filename):
+                    with open(filename, 'r', encoding='utf-8') as f:
+                        return f.read()
+            return jsonify({"success": False, "message": "index.html template missing"}), 404
+        except Exception as e:
+            return f"Error: {str(e)}", 500
+
+    return jsonify({"success": False, "message": f"Endpoint '{full_path}' is unmapped."}), 404
