@@ -41,6 +41,10 @@ MEMORY_ASSET_CACHE = {}
 
 # Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
+PURGED_LEGACY_DB = False
+
+# List of allowed user IDs permitted in private chats (Owner is natively allowed)
+ALLOWED_USERS = [OWNER_ID]
 
 def get_mime_type(filename):
     mime, _ = mimetypes.guess_type(filename)
@@ -714,19 +718,25 @@ def bulk_zip_logic(version):
 # Telegram Bot Database & Webhook System
 # ==========================================
 
-def is_action_permitted(chat_id, user_id):
-    # Owner is always allowed
-    if user_id == OWNER_ID:
-         return True
-    # Anyone inside the designated allowed Group Chat is allowed
-    if str(chat_id) == GROUP_ID:
-        return True
-    # Explicitly allowed users (via approved requests stored in Owner's DB) are allowed in private chat
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
-    return False
+def send_message(chat_id, text, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        return res.json()
+    except Exception as e:
+        print(f"Telegram send error: {e}")
+    return None
+
+def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+         print(f"Telegram menu send error: {e}")
 
 def read_db_from_chat(chat_id):
     try:
@@ -812,6 +822,24 @@ def get_db():
 def save_db(db):
     write_db_to_chat(OWNER_ID, db)
 
+def is_user_allowed(user_id):
+    if user_id == OWNER_ID: return True
+    db = get_db()
+    for u in db.get("allowed_users", []):
+        if isinstance(u, int) and u == user_id: return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
+    return False
+
+def is_action_permitted(chat_id, user_id):
+    """Checks if the user has permission to interact with the bot."""
+    if user_id == OWNER_ID:
+        return True
+    if str(chat_id) == GROUP_ID:
+        return True
+    if is_user_allowed(user_id):
+        return True
+    return False
+
 def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
     db = get_db()
     allowed = db.get("allowed_users", [])
@@ -832,9 +860,25 @@ def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title=
     db["allowed_users"] = allowed
     save_db(db)
 
-def send_access_request_menu(chat_id, user_id):
-    keyboard = [[{"text": "Request Access 🔑", "callback_data": f"req_access_{user_id}"}]]
-    send_message_with_keyboard(chat_id, "╭─❌ ACCESS RESTRICTED\n╰─You don't have access to this bot. Click below to request.", {"inline_keyboard": keyboard})
+def add_pending_request(user_id, first_name, username, chat_title):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    if not any(p["user_id"] == user_id for p in pending):
+        pending.append({
+            "user_id": user_id,
+            "first_name": first_name,
+            "username": username,
+            "chat_title": chat_title
+        })
+        db["pending_requests"] = pending
+        write_db_to_chat(OWNER_ID, db)
+
+def remove_pending_request(user_id):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    pending = [p for p in pending if p["user_id"] != user_id]
+    db["pending_requests"] = pending
+    write_db_to_chat(OWNER_ID, db)
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -1099,13 +1143,18 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
+            # Secure action bypass for allowed group chat
+            if not is_action_permitted(chat_id, user_id):
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
+                return jsonify({"status": "ok"}), 200
+
             # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            if data.startswith("req_access_"):
+            elif data.startswith("req_access_"):
                 req_uid = int(data.split("_")[-1])
                 cb_user = cb["from"]
                 first_name = cb_user.get("first_name", "Unknown")
@@ -1137,11 +1186,6 @@ def handle_bot_webhook():
                     "parse_mode": "Markdown"
                 }, timeout=10)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Request submitted!"}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-
-            # Secure action bypass for allowed group chat
-            if not is_action_permitted(chat_id, user_id):
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
             elif data.startswith("auth_approve_"):
@@ -1201,7 +1245,7 @@ def handle_bot_webhook():
 
             elif data.startswith("zip_ver_"):
                 ver = data.replace("zip_ver_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Preparing ZIP archive..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 clear_reply_markup(chat_id, msg_id)
                 send_message(chat_id, "⚙️ Generating patch extraction package. Please stand by...")
                 
@@ -1213,7 +1257,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_bnd_"):
                 mapping_id = data.replace("ext_bnd_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Extracting bundle files..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
@@ -1274,7 +1318,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_all_"):
                 mapping_id = data.replace("ext_all_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Bundling archives..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 clear_reply_markup(chat_id, msg_id)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
@@ -1299,7 +1343,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_spec_"):
                 mapping_id = data.replace("ext_spec_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Retrieving specific files list..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 clear_reply_markup(chat_id, msg_id)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
@@ -1373,6 +1417,7 @@ def handle_bot_webhook():
                 if meta:
                     file_name = meta.get("filename", "bundle.unity3d")
                     target_url = meta.get("url")
+                    ver = meta.get("version", "1.126.6")
                     sub_files = parse_bundle_subfiles(target_url)
                     
                     sub_names = "\n".join([f"│ ▫️ {idx:02d}. {sf.get('name') or sf.get('fileName')}" for idx, sf in enumerate(sub_files[:15], 1)])
