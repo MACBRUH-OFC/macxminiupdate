@@ -41,6 +41,7 @@ MEMORY_ASSET_CACHE = {}
 
 # Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
+PURGED_LEGACY_DB = False
 
 # List of allowed user IDs permitted in private chats (Owner is natively allowed)
 ALLOWED_USERS = [OWNER_ID]
@@ -248,7 +249,6 @@ def find_previous_itemhotfix_content(active_version):
                     b64_data = f.get("data", "")
                     if b64_data:
                         return base64.b64decode(b64_data).decode('utf-8', errors='ignore')
-                    break
             break
     return ""
 
@@ -826,7 +826,7 @@ def handle_all_requests(path):
 
 def handle_bot_webhook():
     try:
-        update = request.get_json()
+        update = request.get_json(force=True, silent=True)
         if not update: return jsonify({"status": "ok"}), 200
 
         # Callback Queries
@@ -952,7 +952,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_bnd_"):
                 mapping_id = data.replace("ext_bnd_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Extracting bundle files..."}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
@@ -1106,7 +1106,7 @@ def handle_bot_webhook():
 
             elif data.startswith("back_ext_"):
                 mapping_id = data.replace("back_ext_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
@@ -1153,7 +1153,7 @@ def handle_bot_webhook():
             user_id = user_info.get("id")
             first_name = user_info.get("first_name", "Unknown")
             username = user_info.get("username", "None")
-            raw_text = msg.get("text", "").strip()
+            raw_text = (msg.get("text") or "").strip()
 
             # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
             if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
