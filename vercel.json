@@ -6,10 +6,6 @@
       "use": "@vercel/python"
     },
     {
-      "src": "api/webhook.py",
-      "use": "@vercel/python"
-    },
-    {
       "src": "public/**",
       "use": "@vercel/static"
     }
@@ -17,7 +13,7 @@
   "routes": [
     {
       "src": "/api/webhook",
-      "dest": "api/webhook.py"
+      "dest": "api/index.py"
     },
     {
       "src": "/api/latest-version",
