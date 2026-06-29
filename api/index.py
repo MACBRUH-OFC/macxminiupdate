@@ -21,7 +21,7 @@ VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract"
 
 # Telegram configuration
-BOT_TOKEN = "8654457189:AAHIdGT0cWFn41Z2mw2ClymmarSWW_DjZls"
+BOT_TOKEN = "8654457189:AAGIh11dHZWkGeh4d7xzF6MtwvcJ9UxmA_U"
 GROUP_ID = "-1002252657532"
 OWNER_ID = 1745313119
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -41,7 +41,6 @@ MEMORY_ASSET_CACHE = {}
 
 # Stateless short-lived in-memory mappings to stop pinned database spam
 BOT_TEMP_MAPPINGS = {}
-PURGED_LEGACY_DB = False
 
 # List of allowed user IDs permitted in private chats (Owner is natively allowed)
 ALLOWED_USERS = [OWNER_ID]
@@ -163,6 +162,32 @@ def get_multiple_file_info_data(versions):
             results[v] = FILE_INFO_CACHE[v]
     return results
 
+def find_latest_active_version(requested_version):
+    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
+    candidates = [requested_version]
+    for step in [1, 2, 3]:
+        nxt = get_next_version(requested_version, step)
+        if nxt:
+            candidates.append(nxt)
+            
+    fetched = get_multiple_file_info_data(candidates)
+    
+    for cand in reversed(candidates):
+        if cand in fetched:
+            return fetched[cand]
+            
+    current_temp = requested_version
+    for _ in range(5):
+        prev = get_previous_version(current_temp)
+        if not prev:
+            break
+        exact_fetched = get_multiple_file_info_data([prev])
+        if prev in exact_fetched:
+            return exact_fetched[prev]
+        current_temp = prev
+        
+    return None, None, None
+
 def get_extracted_files(file_id, new_text, active_version, base_url):
     cache_key = f"{active_version}:{file_id}"
     if cache_key in EXTRACTED_FILES_CACHE:
@@ -223,6 +248,7 @@ def find_previous_itemhotfix_content(active_version):
                     b64_data = f.get("data", "")
                     if b64_data:
                         return base64.b64decode(b64_data).decode('utf-8', errors='ignore')
+                    break
             break
     return ""
 
@@ -239,7 +265,7 @@ def extract_new_game_items(active_version, new_text):
     if not itemhotfix_id:
         return []
         
-    text_data, active_ver, base_url = get_file_info_data_exact(active_version)
+    text_data, active_ver, base_url = get_file_info_data(active_version)
     if not base_url:
         return []
 
@@ -730,9 +756,11 @@ def telegram_webhook():
             protocol = "https" if "localhost" not in host else "http"
             current_url = f"{protocol}://{host}/api/webhook"
             
+            # Webhook registration payload
             webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
             setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
             
+            # Send test diagnostic startup message to Owner personal chat
             diagnostic_text = (
                 "<b>🔔 MINIUPDATE BOT ONLINE</b>\n\n"
                 "🟢 Webhook successfully compiled and is active!\n"
@@ -749,9 +777,21 @@ def telegram_webhook():
                 "telegram_webhook_response": setup_res
             }), 200
         except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 500
+            return jsonify({
+                "status": "error",
+                "message": f"Setup failed: {str(e)}"
+            }), 500
             
+    # Handle POST (actual webhook updates)
     return handle_bot_webhook()
+
+@app.route('/api/latest-version', methods=['GET'])
+def api_latest_version():
+    return latest_version_logic()
+
+@app.route('/api/update', methods=['GET'])
+def api_update():
+    return check_update_logic()
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
@@ -761,13 +801,6 @@ def handle_all_requests(path):
     
     if full_path == '/api/process' or full_path == '/process' or action == 'process':
         return process_file_logic()
-    elif full_path == '/api/latest-version' or full_path == '/latest-version' or action == 'latest-version':
-        return latest_version_logic()
-    elif full_path == '/api/update' or full_path == '/update' or action == 'update':
-        return check_update_logic()
-    elif full_path == '/api/bulk-zip' or full_path == '/bulk-zip' or action == 'bulk-zip':
-        version = request.args.get('version', '').strip()
-        return bulk_zip_logic(version)
     elif full_path == '/api/extract-zip' or full_path == '/extract-zip' or action == 'extract-zip':
         token = request.args.get('token')
         return extract_zip_logic(token)
@@ -805,13 +838,18 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
+            # Secure action bypass for allowed group chat
+            if not is_action_permitted(chat_id, user_id):
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
+                return jsonify({"status": "ok"}), 200
+
             # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            if data.startswith("req_access_"):
+            elif data.startswith("req_access_"):
                 req_uid = int(data.split("_")[-1])
                 cb_user = cb["from"]
                 first_name = cb_user.get("first_name", "Unknown")
@@ -843,11 +881,6 @@ def handle_bot_webhook():
                     "parse_mode": "Markdown"
                 }, timeout=10)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Request submitted!"}, timeout=5)
-                return jsonify({"status": "ok"}), 200
-
-            # Secure action bypass for allowed group chat
-            if not is_action_permitted(chat_id, user_id):
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
             elif data.startswith("auth_approve_"):
@@ -919,7 +952,7 @@ def handle_bot_webhook():
 
             elif data.startswith("ext_bnd_"):
                 mapping_id = data.replace("ext_bnd_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Extracting bundle files..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
@@ -1073,7 +1106,7 @@ def handle_bot_webhook():
 
             elif data.startswith("back_ext_"):
                 mapping_id = data.replace("back_ext_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Returning..."}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(mapping_id)
                 if meta:
