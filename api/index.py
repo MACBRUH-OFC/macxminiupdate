@@ -21,7 +21,7 @@ VERSION_API = 'https://ff-version.vercel.app/update'
 EXTRACTOR_API_URL = "https://ff-asset-extractor.vercel.app/api/extract"
 
 # Telegram configuration
-BOT_TOKEN = "8654457189:AAHxcYpWTR0y1Exbaq30-Gqve0kHzJYdTcE"
+BOT_TOKEN = "8654457189:AAHIdGT0cWFn41Z2mw2ClymmarSWW_DjZls"
 GROUP_ID = "-1002252657532"
 OWNER_ID = 1745313119
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
