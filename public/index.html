@@ -24,7 +24,6 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
 @media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
-/* Increased default panel height to allow files list plenty of visual space */
 .uniform-panel { 
     background: #09090d; border: 1px solid #181822; position: relative; 
     box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 680px; display: flex; 
@@ -158,7 +157,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 
                 <div id="wrapperManual" class="hidden w-full text-center">
                     <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">Enter miniupdate Version</span>
-                    <input type="text" id="inputVersion" class="input-text-nexus" placeholder="e.g. 1.111.15">
+                    <input type="text" id="inputVersion" class="input-text-nexus" placeholder="e.g. 1.128.9">
                 </div>
 
                 <button id="extractBtn" class="btn-mechanical w-full h-12 text-sm font-bold italic flex-shrink-0">
@@ -297,6 +296,7 @@ let activeBuildIsNewPatch = false;
 
 let offlineDataPayloadSessionCache = {};
 let currentPreviewRequestId = 0;
+let currentTraySubAssets = []; // Cache list of active expanded sub-assets inside current expanded bundle
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
@@ -411,6 +411,7 @@ function resetOutputWorkspace() {
     activeNewItems = [];
     offlineDataPayloadSessionCache = {};
     currentPreviewRequestId++;
+    currentTraySubAssets = [];
 
     fileList.innerHTML = "";
     itemList.innerHTML = "";
@@ -554,7 +555,7 @@ function renderList() {
 
         let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
         if (item.status === "Modified") {
-            badgeColor = "bg-amber-500/10 text-amber-400 border-emerald-500/20";
+            badgeColor = "bg-amber-500/10 text-amber-400 border border-emerald-500/20";
         }
 
         row.innerHTML = `
@@ -701,6 +702,15 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             return;
         }
 
+        // Cache tray list internally to draw referenced maps later
+        currentTraySubAssets = targets.map(t => ({
+            name: t.name || t.fileName || "unnamed_asset",
+            label: t.type || t.label || "Unknown",
+            url: t.preview_url || t.url || "",
+            associatedTextures: t.associated_textures || [],
+            compositeParts: t.composite_parts || []
+        }));
+
         targets.forEach((asset, subIdx) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 rounded cursor-pointer text-left";
@@ -793,6 +803,130 @@ function showFallbackError(errorMessage) {
         </div>`;
 }
 
+function json_parse_clean(str) {
+    try {
+        return JSON.parse(str);
+    } catch (e) {
+        const trimmed = str.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                return JSON.parse(trimmed);
+            } catch (err) {}
+        }
+        return null;
+    }
+}
+
+function renderStructuredJSON(jsonObj, ext, label, item) {
+    const isMono = label.toLowerCase().includes('monobehaviour') || label.toLowerCase().includes('scriptableobject') || label.toLowerCase().includes('gamedata');
+    let propertiesHtml = "";
+    
+    if (isMono && jsonObj && typeof jsonObj === 'object' && !Array.isArray(jsonObj)) {
+        const rows = Object.entries(jsonObj).map(([key, val]) => {
+            let valStr = typeof val === 'object' ? JSON.stringify(val) : String(val);
+            if (valStr.length > 120) valStr = valStr.substring(0, 117) + "...";
+            return `
+                <tr class="border-b border-zinc-900 hover:bg-zinc-950/50">
+                    <td class="py-2 pr-4 font-mono text-[10px] text-yellow-500 font-bold select-text">${key}</td>
+                    <td class="py-2 font-mono text-[10px] text-zinc-300 select-text break-all">${valStr.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</td>
+                </tr>`;
+        }).join('');
+        
+        propertiesHtml = `
+            <div class="mb-3 bg-black/60 border border-zinc-900 rounded-xl p-3 text-left">
+                <span class="block text-[8px] font-black text-emerald-400 uppercase tracking-widest mb-2"><i class="fa-solid fa-gears mr-1"></i>Component Properties</span>
+                <div class="max-h-[220px] overflow-y-auto custom-scrollbar">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-zinc-800 text-zinc-500 text-[8px] font-black uppercase">
+                                <th class="pb-1 pr-4">Property Key</th>
+                                <th class="pb-1">Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows || '<tr><td colspan="2" class="text-[9px] text-zinc-500 py-1">No direct properties found</td></tr>'}</tbody>
+                    </table>
+                </div>
+            </div>`;
+    }
+
+    // Dynamic Connection Mapping Logic
+    let connectionHtml = "";
+    let referencedSiblings = [];
+    if (jsonObj && typeof jsonObj === 'object') {
+        const jsonStr = JSON.stringify(jsonObj).toLowerCase();
+        currentTraySubAssets.forEach(sibling => {
+            const sibName = sibling.name.toLowerCase();
+            if (sibName && sibName !== item.name.toLowerCase()) {
+                const baseName = sibName.split('.')[0];
+                if (jsonStr.includes(baseName) && baseName.length > 4) {
+                    referencedSiblings.push(sibling);
+                }
+            }
+        });
+    }
+
+    if (referencedSiblings.length > 0) {
+        const siblingList = referencedSiblings.map(sib => `
+            <div class="flex items-center justify-between p-2 rounded-lg bg-zinc-950/60 border border-zinc-900">
+                <div class="flex items-center gap-2 min-w-0">
+                    <i class="fa-solid fa-link text-yellow-500 text-[10px]"></i>
+                    <div class="min-w-0 text-left">
+                        <span class="block text-[10px] font-bold text-zinc-300 truncate">${sib.name}</span>
+                        <span class="block text-[8px] font-black text-zinc-600 uppercase tracking-wider">${sib.label}</span>
+                    </div>
+                </div>
+                <button onclick="triggerDirectSiblingPreview('${encodeURIComponent(sib.url)}', '${encodeURIComponent(sib.name)}', '${encodeURIComponent(sib.label)}', '${encodeURIComponent(JSON.stringify(sib.associatedTextures))}', '${encodeURIComponent(JSON.stringify(sib.compositeParts))}')" class="px-2.5 py-1 bg-yellow-500 text-black text-[8px] font-black uppercase rounded hover:bg-white transition-all flex items-center gap-1 flex-shrink-0">
+                    <i class="fa-solid fa-eye"></i> View Connection
+                </button>
+            </div>
+        `).join('');
+
+        connectionHtml = `
+            <div class="mb-3 bg-black/60 border border-zinc-900 rounded-xl p-3 text-left">
+                <span class="block text-[8px] font-black text-yellow-500 uppercase tracking-widest mb-2"><i class="fa-solid fa-share-nodes mr-1"></i>Active Data Connections</span>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[160px] overflow-y-auto custom-scrollbar pr-1">${siblingList}</div>
+            </div>`;
+    }
+
+    const prettyJson = JSON.stringify(jsonObj, null, 2);
+    
+    return `
+        <div class="custom-player-wrapper h-full">
+            <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204] overflow-hidden flex flex-col p-3">
+                <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
+                    <span>${isMono ? 'Component Parameter Visualizer' : 'Structured Configuration File'}</span>
+                    <span class="text-zinc-400 font-mono text-[9px]">${ext.toUpperCase()} Config File</span>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-1 text-left">
+                    ${propertiesHtml}
+                    ${connectionHtml}
+                    <div class="relative bg-black/40 border border-zinc-900/40 rounded p-2">
+                        <span class="absolute right-2 top-2 text-[8px] font-black text-zinc-600 uppercase tracking-wider select-none">Raw Content</span>
+                        <pre class="text-[10px] font-mono text-zinc-400 whitespace-pre-wrap select-text leading-normal">${prettyJson.substring(0, 50000)}</pre>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+}
+
+window.triggerDirectSiblingPreview = function(encodedUrl, encodedName, encodedLabel, encodedTextures, encodedParts) {
+    const url = decodeURIComponent(encodedUrl);
+    const name = decodeURIComponent(encodedName);
+    const label = decodeURIComponent(encodedLabel);
+    const textures = JSON.parse(decodeURIComponent(encodedTextures));
+    const parts = JSON.parse(decodeURIComponent(encodedParts));
+
+    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
+
+    selectFile({
+        id: url,
+        name: name,
+        label: label,
+        associatedTextures: textures,
+        compositeParts: parts
+    }, null);
+};
+
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
@@ -837,7 +971,6 @@ async function selectFile(item, element) {
                 </div>
             </div>`;
         
-        // Populate mesh mappings inside the relation descriptor card
         const relationBox = document.getElementById('meshRelationBox');
         const descText = document.getElementById('meshRelationDesc');
         
@@ -935,30 +1068,35 @@ async function selectFile(item, element) {
         else {
             try {
                 let processedTextString = "";
+                let isJsonParsed = false;
+                let parsedJson = null;
+
                 if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
                     const parts = liveSourceData.split(',');
                     processedTextString = atob(parts[1]);
                 } else {
                     const rawTextResponse = await fetch(liveSourceData);
                     if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
-
-                    const contentText = await rawTextResponse.text();
-                    const sanitizedCheck = contentText.trim().toLowerCase();
-
-                    if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head')) {
-                        throw new Error("Loop detection active: Server returned local HTML routing document instead of asset file raw bytes.");
-                    }
-                    processedTextString = contentText;
+                    processedTextString = await rawTextResponse.text();
                 }
 
                 if (requestId !== currentPreviewRequestId) return;
 
-                mediaBox.innerHTML = `
-                    <div class="custom-player-wrapper h-full">
-                        <div class="aspect-16-9-viewport full-viewport-mesh">
-                            <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
-                        </div>
-                    </div>`;
+                try {
+                    parsedJson = json_parse_clean(processedTextString);
+                    if (parsedJson) isJsonParsed = true;
+                } catch(e) {}
+
+                if (isJsonParsed && parsedJson) {
+                    mediaBox.innerHTML = renderStructuredJSON(parsedJson, ext, item.label, item);
+                } else {
+                    mediaBox.innerHTML = `
+                        <div class="custom-player-wrapper h-full">
+                            <div class="aspect-16-9-viewport full-viewport-mesh">
+                                <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
+                            </div>
+                        </div>`;
+                }
             } catch (e) {
                 if (requestId === currentPreviewRequestId) showFallbackError(e.message);
             }
