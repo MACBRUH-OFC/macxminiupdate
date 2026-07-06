@@ -221,7 +221,7 @@ def find_previous_itemhotfix_content(active_version):
     if len(parts) != 3:
         return ""
     major, middle, minor = parts[0], parts[1], int(parts[2])
-    prev_versions = [f"{major}.{middle}.{m_val}" for m_val in range(minor - 1, max(0, minor - 9), -1)]
+    prev_versions = [f"{major}{middle}{m_val}" for m_val in range(minor - 1, max(0, minor - 9), -1)]
     if not prev_versions:
         return ""
     fetched_maps = get_multiple_file_info_data(prev_versions)
@@ -573,7 +573,18 @@ def handle_extractor_response(response):
         for t in textures:
             t_name = os.path.splitext(t.get("name") or t.get("fileName") or "")[0].lower()
             if m_name in t_name or t_name in m_name or m_name.replace("_mesh", "") in t_name:
-                t_token = encode_token(t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_name.encode()).hexdigest()}", t_name, get_mime_type(t_name), base64.b64decode(t.get("data", "")) if t.get("data") else None)
+                t_url = t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_name.encode()).hexdigest()}"
+                
+                t_data = t.get("data", "")
+                t_bytes = None
+                if isinstance(t_data, str) and t_data:
+                    try: t_bytes = base64.b64decode(t_data)
+                    except Exception: t_bytes = t_data.encode('utf-8')
+                elif isinstance(t_data, (dict, list)):
+                    try: t_bytes = json.dumps(t_data).encode('utf-8')
+                    except Exception: pass
+                    
+                t_token = encode_token(t_url, t_name, get_mime_type(t_name), t_bytes)
                 matched_textures.append(f"/api?action=stream&token={t_token}")
         m["associated_textures"] = matched_textures
 
@@ -599,7 +610,15 @@ def handle_extractor_response(response):
                         continue
                     o_name = other.get("name") or other.get("fileName") or ""
                     o_url = other.get("preview_url") or other.get("url") or f"https://local-placeholder/{hashlib.md5(o_name.encode()).hexdigest()}"
-                    o_bytes = base64.b64decode(other.get("data", "")) if other.get("data") else None
+                    
+                    o_data = other.get("data", "")
+                    o_bytes = None
+                    if isinstance(o_data, str) and o_data:
+                        try: o_bytes = base64.b64decode(o_data)
+                        except Exception: o_bytes = o_data.encode('utf-8')
+                    elif isinstance(o_data, (dict, list)):
+                        try: o_bytes = json.dumps(o_data).encode('utf-8')
+                        except Exception: pass
                     o_token = encode_token(o_url, o_name, 'application/octet-stream', o_bytes)
                     m_other_parts.append({
                         "name": o_name,
@@ -619,10 +638,43 @@ def handle_extractor_response(response):
         except Exception:
             file_bytes = b""
 
+        # Safely capture any nested properties, MonoBehaviours configs, or GameData parsed content
+        structured_data = None
+        for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
+            val = asset.get(key)
+            if val is not None:
+                if isinstance(val, (dict, list)):
+                    structured_data = val
+                    break
+                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
+                    try:
+                        structured_data = json.loads(val)
+                        break
+                    except Exception:
+                        pass
+
+        if structured_data is not None:
+            try:
+                # Pretty print GameData and MonoBehaviours so they display elegantly in the preview box
+                json_str = json.dumps(structured_data, indent=2, ensure_ascii=False)
+                file_bytes = json_str.encode('utf-8')
+                detected_content_type = "application/json"
+            except Exception:
+                file_bytes = b""
+        else:
+            raw_val = asset.get("data", "")
+            if isinstance(raw_val, str) and raw_val:
+                try:
+                    file_bytes = base64.b64decode(raw_val)
+                except Exception:
+                    file_bytes = raw_val.encode('utf-8')
+
         remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
         if not remote_preview_url:
             if not file_bytes:
-                continue
+                # Provide an empty JSON placeholder to prevent skipping from accordion lists
+                file_bytes = b"{}"
+                detected_content_type = "application/json"
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
 
@@ -642,7 +694,6 @@ def handle_extractor_response(response):
         asset["url"] = local_proxy_route
         processed_assets.append(asset)
 
-    # Re-map fully processed lists
     extractor_data["assets"] = processed_assets
     extractor_data["files"] = processed_assets
 
@@ -1336,7 +1387,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": sent_msg_id,
+                        "message_id": msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
