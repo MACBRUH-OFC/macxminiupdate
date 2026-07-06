@@ -1577,7 +1577,7 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
                 else if (fileStr.includes('_s.') || fileStr.includes('_s_') || fileStr.includes('specular') || fileStr.includes('gloss')) {
                     specularTexUrl = urlStr;
                 }
-                else if (fileStr.includes('_m.') || fileStr.includes('_m_') || fileStr.includes('metallic') || urlDecoded.includes('metalness')) {
+                else if (fileStr.includes('_m.') || fileStr.includes('_m_') || fileStr.includes('metallic') || fileStr.includes('metalness')) {
                     metallicTexUrl = urlStr;
                 }
                 else {

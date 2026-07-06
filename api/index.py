@@ -807,13 +807,21 @@ def find_references_in_json(obj, asset_names):
     
     return referenced
 
+def get_texture_base_and_type(filename):
+    """Extracts base filename prefix and type suffix (rgb or sa) cleanly"""
+    fname_lower, ext = os.path.splitext(filename.lower())
+    if fname_lower.endswith('_sa'):
+        return fname_lower[:-3], 'sa', ext
+    elif fname_lower.endswith('_rgb'):
+        return fname_lower[:-4], 'rgb', ext
+    return fname_lower, 'main', ext
+
 def merge_rgb_and_sa(rgb_bytes, sa_bytes):
     """Combines RGB diffuse and SA textures into a single RGBA PNG using PIL"""
     try:
         rgb_img = Image.open(io.BytesIO(rgb_bytes)).convert("RGB")
         sa_img = Image.open(io.BytesIO(sa_bytes)).convert("L")
         
-        # Resize SA to match RGB if dimensions differ
         if rgb_img.size != sa_img.size:
             sa_img = sa_img.resize(rgb_img.size, Image.Resampling.LANCZOS)
         
@@ -829,58 +837,81 @@ def merge_rgb_and_sa(rgb_bytes, sa_bytes):
 
 def trigger_sa_rgb_merges(processed_assets, textures, categories):
     """Identifies and blends RGB & SA texture assets into single RGBA cache files"""
-    textures_by_name = {t["fileName"].lower(): t for t in textures}
-    sa_pairs = []
-    
+    if not HAS_PIL:
+        return
+        
+    # Group textures by base prefix and extension
+    grouped_textures = {}
     for t in textures:
-        fname_lower = t["fileName"].lower()
-        match = re.search(r'^(.*?)_sa\.(png|jpg|jpeg|webp)$', fname_lower)
-        if match:
-            base_without_sa = match.group(1) + "." + match.group(2)
-            if base_without_sa in textures_by_name:
-                rgb_asset = textures_by_name[base_without_sa]
-                sa_pairs.append((rgb_asset, t))
-                
-    for rgb_asset, sa_asset in sa_pairs:
-        try:
-            rgb_key = rgb_asset["url"].split("token=")[-1]
-            rgb_bytes = None
-            if rgb_key in MEMORY_ASSET_CACHE:
-                rgb_bytes = MEMORY_ASSET_CACHE[rgb_key]["content"]
-            else:
-                decoded_rgb = decode_token(rgb_key)
-                if decoded_rgb and decoded_rgb.get("url"):
-                    res = http_session.get(decoded_rgb["url"], timeout=10)
-                    if res.status_code == 200:
-                        rgb_bytes = res.content
+        base, t_type, ext = get_texture_base_and_type(t["fileName"])
+        key = (base, ext)
+        if key not in grouped_textures:
+            grouped_textures[key] = {}
+        grouped_textures[key][t_type] = t
+
+    for (base, ext), assets_map in list(grouped_textures.items()):
+        sa_asset = assets_map.get('sa')
+        rgb_asset = assets_map.get('rgb') or assets_map.get('main')
+        
+        if sa_asset and rgb_asset and sa_asset != rgb_asset:
+            try:
+                rgb_key = rgb_asset["url"].split("token=")[-1]
+                # Fix query string parameters on token extraction if appended with file details
+                if "&file=" in rgb_key:
+                    rgb_key = rgb_key.split("&file=")[0]
+                    
+                rgb_bytes = None
+                if rgb_key in MEMORY_ASSET_CACHE:
+                    rgb_bytes = MEMORY_ASSET_CACHE[rgb_key]["content"]
+                else:
+                    decoded_rgb = decode_token(rgb_key)
+                    if decoded_rgb and decoded_rgb.get("url"):
+                        res = http_session.get(decoded_rgb["url"], timeout=10)
+                        if res.status_code == 200:
+                            rgb_bytes = res.content
+                            
+                sa_key = sa_asset["url"].split("token=")[-1]
+                if "&file=" in sa_key:
+                    sa_key = sa_key.split("&file=")[0]
+                    
+                sa_bytes = None
+                if sa_key in MEMORY_ASSET_CACHE:
+                    sa_bytes = MEMORY_ASSET_CACHE[sa_key]["content"]
+                else:
+                    decoded_sa = decode_token(sa_key)
+                    if decoded_sa and decoded_sa.get("url"):
+                        res = http_session.get(decoded_sa["url"], timeout=10)
+                        if res.status_code == 200:
+                            sa_bytes = res.content
+                            
+                if rgb_bytes and sa_bytes:
+                    merged_bytes = merge_rgb_and_sa(rgb_bytes, sa_bytes)
+                    if merged_bytes:
+                        # Rename the target to base name (e.g. FF_UI_Common_assets.png)
+                        new_filename = base.upper() + ext if rgb_asset["fileName"].isupper() else base + ext
                         
-            sa_key = sa_asset["url"].split("token=")[-1]
-            sa_bytes = None
-            if sa_key in MEMORY_ASSET_CACHE:
-                sa_bytes = MEMORY_ASSET_CACHE[sa_key]["content"]
-            else:
-                decoded_sa = decode_token(sa_key)
-                if decoded_sa and decoded_sa.get("url"):
-                    res = http_session.get(decoded_sa["url"], timeout=10)
-                    if res.status_code == 200:
-                        sa_bytes = res.content
+                        # Update Cache of RGB asset with merged RGBA bytes
+                        MEMORY_ASSET_CACHE[rgb_key] = {
+                            "content": merged_bytes,
+                            "filename": new_filename,
+                            "content_type": "image/png"
+                        }
                         
-            if rgb_bytes and sa_bytes:
-                merged_bytes = merge_rgb_and_sa(rgb_bytes, sa_bytes)
-                if merged_bytes:
-                    MEMORY_ASSET_CACHE[rgb_key] = {
-                        "content": merged_bytes,
-                        "filename": rgb_asset["fileName"],
-                        "content_type": "image/png"
-                    }
-                    if sa_asset in processed_assets:
-                        processed_assets.remove(sa_asset)
-                    if sa_asset in textures:
-                        textures.remove(sa_asset)
-                    if sa_asset in categories.get("textures", []):
-                        categories["textures"].remove(sa_asset)
-        except Exception as e:
-            print(f"Failed blending pair: {e}")
+                        # Update filename in-place
+                        rgb_asset["fileName"] = new_filename
+                        # Re-encode custom proxy URL with the updated output name suffix
+                        rgb_asset["preview_url"] = f"/api?action=stream&token={rgb_key}&file={new_filename}"
+                        rgb_asset["url"] = f"/api?action=stream&token={rgb_key}&file={new_filename}"
+                        
+                        # Remove SA asset from processed list & categories
+                        if sa_asset in processed_assets:
+                            processed_assets.remove(sa_asset)
+                        if sa_asset in textures:
+                            textures.remove(sa_asset)
+                        if sa_asset in categories.get("textures", []):
+                            categories["textures"].remove(sa_asset)
+            except Exception as e:
+                print(f"Failed blending pair {base}: {e}")
 
 def handle_extractor_response(response):
     """Handle extractor API response"""
@@ -961,7 +992,8 @@ def handle_extractor_response(response):
                 "content_type": detected_content_type
             }
         
-        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
+        # Suffix file path directly to URL query parameters so BabylonJS identifies PNG/JPG codec correctly
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}&file={filename_str}"
         asset["preview_url"] = local_proxy_route
         asset["url"] = local_proxy_route
         asset["fileName"] = filename_str
@@ -979,6 +1011,8 @@ def handle_extractor_response(response):
     for mat in materials:
         mat_name = os.path.splitext(os.path.basename(mat["fileName"]))[0].lower()
         mat_cache_key = mat["url"].split("token=")[-1]
+        if "&file=" in mat_cache_key:
+            mat_cache_key = mat_cache_key.split("&file=")[0]
         mat_item = MEMORY_ASSET_CACHE.get(mat_cache_key)
         if mat_item:
             try:
@@ -993,6 +1027,8 @@ def handle_extractor_response(response):
     mesh_to_materials = {}
     for rend in renderers:
         rend_cache_key = rend["url"].split("token=")[-1]
+        if "&file=" in rend_cache_key:
+            rend_cache_key = rend_cache_key.split("&file=")[0]
         rend_item = MEMORY_ASSET_CACHE.get(rend_cache_key)
         if rend_item:
             try:
@@ -1165,6 +1201,10 @@ def stream_cache_logic(token):
     """Stream cached asset logic"""
     if not token:
         return "Missing token query parameter", 400
+        
+    # Squelch appended BabylonJS extension path params if parsed directly
+    if "&file=" in token:
+        token = token.split("&file=")[0]
     
     decoded = decode_token(token)
     if not decoded:
