@@ -126,7 +126,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 <div class="brand-strip">
     <img src="https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png" class="h-7 object-contain" alt="Logo">
 </div>
-<div class="brand-line"></div>
+.brand-line { width: 100%; height: 3px; background: var(--ff-yellow); }
 
 <div class="flex flex-col items-center pt-6 pb-4 px-4 select-none">
     <div class="text-center tracking-tight">
@@ -581,7 +581,7 @@ function renderList() {
             </div>
             <div class="accordion-tray" id="tray-${index}">
                 <div class="text-[10px] text-zinc-500 py-2 text-center" id="loader-${index}"><i class="fa-solid fa-cog fa-spin text-yellow-500 mr-2"></i>Running Extraction Pipeline API...</div>
-                <div class="space-y-1" id="sublist-${index}"></div>
+                <div class="space-y-1.5" id="sublist-${index}"></div>
             </div>
         `;
         fileList.appendChild(row);
@@ -661,6 +661,56 @@ function renderItemList() {
     });
 }
 
+function toggleSubFolder(folderId, headerEl) {
+    const folder = document.getElementById(folderId);
+    const arrow = headerEl.querySelector('.fa-chevron-down');
+    if (folder.classList.contains('hidden')) {
+        folder.classList.remove('hidden');
+        arrow.style.transform = 'rotate(180deg)';
+    } else {
+        folder.classList.add('hidden');
+        arrow.style.transform = 'rotate(0deg)';
+    }
+}
+
+function selectCompositeAsset(compString, element) {
+    cleanPreviousMediaTracks();
+
+    currentPreviewRequestId++;
+    const requestId = currentPreviewRequestId;
+
+    const comp = JSON.parse(decodeURIComponent(compString));
+
+    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
+    if (element) {
+        element.classList.add('bg-zinc-900');
+    }
+
+    document.getElementById('previewFallback').classList.add('hidden');
+    document.getElementById('previewContent').classList.remove('hidden');
+
+    const mediaBox = document.getElementById('mediaBox');
+    document.getElementById('mediaTitle').innerText = comp.name;
+    document.getElementById('mediaTypeLabel').innerText = comp.type;
+
+    // Apply visual relation indicator mapping info
+    const relationBox = document.getElementById('meshRelationBox');
+    const descText = document.getElementById('meshRelationDesc');
+    descText.innerText = comp.preview_summary;
+    relationBox.classList.remove('hidden');
+
+    mediaBox.innerHTML = `
+        <div class="custom-player-wrapper h-full">
+            <div class="aspect-16-9-viewport full-viewport-mesh">
+                <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
+            </div>
+        </div>`;
+
+    initBabylonMeshScene("babylonAssetCanvas", comp.url, comp.name, comp.associated_textures || [], comp.composite_parts || []);
+    
+    document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
 async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     const tray = document.getElementById(`tray-${index}`);
     const arrow = document.getElementById(`arrow-${index}`);
@@ -702,14 +752,35 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             return;
         }
 
-        let targets = extractedData.assets || extractedData.files || [];
-        if (targets.length === 0) {
-            sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1 text-center">No components found inside this asset bundle.</div>`;
-            return;
+        let sublistHtml = "";
+        
+        // 1. Render Composite Assemblies if present
+        if (extractedData.composites && extractedData.composites.length > 0) {
+            sublistHtml += `
+                <div class="mb-3">
+                    <span class="text-[8px] font-black text-yellow-500 uppercase tracking-widest block mb-2"><i class="fa-solid fa-cube mr-1"></i>Composite 3D Scenes</span>
+                    <div class="space-y-1.5">
+            `;
+            extractedData.composites.forEach(comp => {
+                sublistHtml += `
+                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] font-bold text-yellow-500 truncate"><i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>${comp.name}</span>
+                            <span class="text-[8px] px-1.5 py-0.2 rounded border border-yellow-500/20 bg-yellow-500/5 text-yellow-400 uppercase tracking-wider font-mono">Assembly Ready</span>
+                        </div>
+                        <p class="text-[9px] text-zinc-500 mt-1 leading-normal">${comp.preview_summary}</p>
+                    </div>
+                `;
+            });
+            sublistHtml += `
+                    </div>
+                </div>
+            `;
         }
 
-        // Cache tray list internally to draw referenced maps later
-        currentTraySubAssets = targets.map(t => ({
+        // 2. Cache tray list internally to draw referenced maps later
+        let rawList = extractedData.assets || [];
+        currentTraySubAssets = rawList.map(t => ({
             name: t.name || t.fileName || "unnamed_asset",
             label: t.type || t.label || "Unknown",
             url: t.preview_url || t.url || "",
@@ -717,34 +788,54 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             compositeParts: t.composite_parts || []
         }));
 
-        targets.forEach((asset, subIdx) => {
-            const subRow = document.createElement('div');
-            subRow.className = "sub-asset-row hover:bg-zinc-950 rounded cursor-pointer text-left";
+        // 3. Render Collapsible Categories Explorer Folders
+        const folders = [
+            { key: "3d_models", label: "Geometry & 3D Meshes", icon: "fa-cube" },
+            { key: "textures", label: "Textures & Sprite Assets", icon: "fa-image" },
+            { key: "materials", label: "Materials & Shader Maps", icon: "fa-wand-magic-sparkles" },
+            { key: "animations", label: "Animator Tracks & Controllers", icon: "fa-person-running" },
+            { key: "configs", label: "Gameplay Config & MonoBehaviours", icon: "fa-gear" },
+            { key: "others", label: "Other Asset Contents", icon: "fa-file-code" }
+        ];
 
-            let displayName = asset.name || asset.fileName || "unnamed_asset";
-            let rawType = asset.type || asset.label || "Unknown";
-
-            const uniqueTrackingKey = asset.preview_url || asset.url || "";
-            offlineDataPayloadSessionCache[uniqueTrackingKey] = uniqueTrackingKey;
-
-            subRow.onclick = (e) => {
-                e.stopPropagation();
-                selectFile({ 
-                    id: uniqueTrackingKey,
-                    name: displayName, 
-                    label: rawType,
-                    associatedTextures: asset.associated_textures || [],
-                    compositeParts: asset.composite_parts || []
-                }, subRow);
-            };
-
-            subRow.innerHTML = `
-                <span class="truncate pr-2 text-zinc-400 font-mono text-[10px] hover:text-[#ffde00] flex items-center gap-2">
-                    <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
-                </span>
+        sublistHtml += `<div class="space-y-1.5 mt-2">`;
+        folders.forEach(f => {
+            const list = extractedData.categories[f.key] || [];
+            if (list.length === 0) return;
+            
+            sublistHtml += `
+                <div class="flex flex-col bg-black/30 rounded-xl border border-zinc-900/60 overflow-hidden">
+                    <div class="flex items-center justify-between p-2.5 cursor-pointer hover:bg-zinc-950 transition-all text-left select-none" onclick="toggleSubFolder('folder-${index}-${f.key}', this)">
+                        <span class="text-[10px] font-bold text-zinc-400 flex items-center gap-2">
+                            <i class="fa-solid ${f.icon} opacity-60"></i> ${f.label} (${list.length})
+                        </span>
+                        <i class="fa-solid fa-chevron-down text-[8px] text-zinc-600 transition-transform"></i>
+                    </div>
+                    <div id="folder-${index}-${f.key}" class="hidden bg-black/40 border-t border-zinc-950 p-2 space-y-1">
             `;
-            sublist.appendChild(subRow);
+            
+            list.forEach(asset => {
+                let displayName = asset.name || asset.fileName || "unnamed_asset";
+                let rawType = asset.type || asset.label || "Unknown";
+                const uniqueTrackingKey = asset.preview_url || asset.url || "";
+                
+                sublistHtml += `
+                    <div class="sub-asset-row hover:bg-zinc-950/80 rounded p-1.5 cursor-pointer text-left flex items-center justify-between" onclick="event.stopPropagation(); selectFile({ id: '${uniqueTrackingKey}', name: '${displayName}', label: '${rawType}', associatedTextures: ${JSON.stringify(asset.associated_textures || [])}, compositeParts: ${JSON.stringify(asset.composite_parts || [])} }, this)">
+                        <span class="truncate pr-2 text-zinc-400 font-mono text-[9px] hover:text-[#ffde00] flex items-center gap-2">
+                            <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
+                        </span>
+                    </div>
+                `;
+            });
+            
+            sublistHtml += `
+                    </div>
+                </div>
+            `;
         });
+        sublistHtml += `</div>`;
+
+        sublist.innerHTML = sublistHtml;
     } catch (err) {
         loader.style.display = "none";
         sublist.innerHTML = `<div class="text-[10px] text-red-500 py-2 text-center font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40">${err.message || err}</div>`;
@@ -914,24 +1005,6 @@ function renderStructuredJSON(jsonObj, ext, label, item) {
             </div>
         </div>`;
 }
-
-window.triggerDirectSiblingPreview = function(encodedUrl, encodedName, encodedLabel, encodedTextures, encodedParts) {
-    const url = decodeURIComponent(encodedUrl);
-    const name = decodeURIComponent(encodedName);
-    const label = decodeURIComponent(encodedLabel);
-    const textures = JSON.parse(decodeURIComponent(encodedTextures));
-    const parts = JSON.parse(decodeURIComponent(encodedParts));
-
-    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
-
-    selectFile({
-        id: url,
-        name: name,
-        label: label,
-        associatedTextures: textures,
-        compositeParts: parts
-    }, null);
-};
 
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
