@@ -451,9 +451,9 @@ def check_update_logic():
             parts = line.split(',')
             if len(parts) >= 3:
                 file_id = parts[0].strip()
-                try: old_size = int(parts[2])
-                except Exception: old_size = 0
-                old_files_map[file_id] = old_size
+                try: size = int(parts[2])
+                except Exception: size = 0
+                old_files_map[file_id] = size
     file_infos = []
     total_size = 0
     for line in new_text.splitlines():
@@ -858,6 +858,9 @@ def handle_extractor_response(response):
     
     for asset in processed_assets:
         asset.pop("data", None) # Clean inline asset data from json outputs
+        # Clean local file bytes dictionary parameter completely to avoid JSON serialization errors
+        asset.pop("_file_bytes", None) 
+        
         is_categorized = (
             any(asset["fileName"] == m["fileName"] for m in meshes) or
             any(asset["fileName"] == t["fileName"] for t in textures) or
@@ -875,9 +878,11 @@ def handle_extractor_response(response):
     return jsonify(extractor_data), 200
 
 def process_file_logic():
+    """Process/extract file logic"""
     bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
     token = request.args.get('token', '') or request.form.get('token', '')
     real_bundle_url = ""
+    
     if "token=" in bundle_url:
         token_match = re.search(r'token=([^&]+)', bundle_url)
         if token_match:
@@ -887,8 +892,10 @@ def process_file_logic():
     elif token:
         decoded = decode_token(token)
         if decoded: real_bundle_url = decoded.get("url", "")
+    
     if not real_bundle_url and bundle_url.startswith("http"):
         real_bundle_url = bundle_url
+    
     if 'file' in request.files:
         uploaded_file = request.files['file']
         if uploaded_file.filename != '':
@@ -903,6 +910,7 @@ def process_file_logic():
                 return handle_extractor_response(response)
             except Exception as e:
                 return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
+    
     if real_bundle_url:
         try:
             encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
@@ -911,18 +919,26 @@ def process_file_logic():
             return handle_extractor_response(response)
         except Exception as e:
             return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
+    
     return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
 
 def stream_cache_logic(token):
-    if not token: return "Missing token query parameter", 400
+    """Stream cached asset logic"""
+    if not token:
+        return "Missing token query parameter", 400
+        
+    # Squelch appended BabylonJS extension path params if parsed directly
     if "&file=" in token:
         token = token.split("&file=")[0]
+    
     decoded = decode_token(token)
-    if not decoded: return "Expired or invalid stream token payload.", 404
+    if not decoded:
+        return "Expired or invalid stream token payload.", 404
+    
     filename = decoded.get("filename", "file")
     mime_type = decoded.get("content_type", "application/octet-stream")
     cache_key = decoded.get("cache_key")
-    global MEMORY_ASSET_CACHE
+    
     if cache_key and cache_key in MEMORY_ASSET_CACHE:
         cached_item = MEMORY_ASSET_CACHE[cache_key]
         response = Response(cached_item["content"], mimetype=mime_type)
@@ -930,6 +946,7 @@ def stream_cache_logic(token):
         response.headers["Accept-Ranges"] = "bytes"
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
+    
     if "content_b64" in decoded:
         try:
             content = base64.b64decode(decoded["content_b64"])
@@ -944,7 +961,9 @@ def stream_cache_logic(token):
             response.headers["Accept-Ranges"] = "bytes"
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
-        except Exception: pass
+        except Exception:
+            pass
+    
     remote_url = decoded.get("url")
     if remote_url:
         try:
@@ -961,21 +980,34 @@ def stream_cache_logic(token):
                 response.headers["Accept-Ranges"] = "bytes"
                 response.headers["Access-Control-Allow-Origin"] = "*"
                 return response
-        except Exception: pass
+            else:
+                print(f"Non-200 stream fetch status for token: {res.status_code}")
+        except Exception as e:
+            print(f"Error streaming cache from remote CDN: {e}")
+    
     return "Expired or unavailable stream token payload.", 404
 
 def extract_zip_logic(token):
-    if not token: return "Missing token query parameter", 400
+    """Extract and download as ZIP logic"""
+    if not token:
+        return "Missing token query parameter", 400
+    
     decoded = decode_token(token)
-    if not decoded: return "Invalid or expired stream token payload", 400
+    if not decoded:
+        return "Invalid or expired stream token payload", 400
+    
     remote_url = decoded.get("url")
-    if not remote_url: return "Target bundle address missing in decrypted token payload", 400
+    if not remote_url:
+        return "Target bundle address missing in decrypted token payload", 400
+    
     encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
     extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+    
     try:
         res = http_session.get(extractor_url, timeout=60)
         if res.status_code != 200:
             return f"Extractor pipeline failure status code: {res.status_code}", 500
+        
         try:
             data = res.json()
         except Exception as e:
@@ -1012,14 +1044,19 @@ def extract_zip_logic(token):
         response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
+        
     except Exception as e:
         return f"Failed connecting proxy mapping to zip extractor endpoint: {e}", 500
 
 def bulk_zip_logic(version):
-    if not version or not re.match(r'^\d+\.\d+\.\d+$', version): return "Incorrect version format entered", 400
+    """Bulk ZIP download logic"""
+    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
+        return "Incorrect version format entered", 400
+    
     new_text, active_version, base_url = get_file_info_data(version)
     if not new_text:
         return "Target version logs missing from server", 404
+    
     prev_versions = []
     current_temp = active_version
     for _ in range(6):
@@ -1090,345 +1127,88 @@ def bulk_zip_logic(version):
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
 
-
-# ==========================================
-# Telegram Bot Database & Webhook System
-# ==========================================
-
-def send_message(chat_id, text, parse_mode=None):
-    payload = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-        return res.json()
-    except Exception as e:
-        print(f"Telegram send error: {e}")
-    return None
-
-def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
-    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-    except Exception as e:
-         print(f"Telegram menu send error: {e}")
-
-def read_db_from_chat(chat_id):
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            text = res["result"]["pinned_message"].get("text", "")
-            if "📦 DATABASE STORAGE" in text:
-                lines = text.split("\n")
-                for line in lines:
-                    line_strip = line.strip()
-                    if line_strip.startswith("{") and line_strip.endswith("}"):
-                        return json.loads(line_strip)
-    except Exception as e:
-        print(f"DB read warning for {chat_id}: {e}")
-    return None
-
-def write_db_to_chat(chat_id, db_dict):
-    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            msg = res["result"]["pinned_message"]
-            if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
-                    "chat_id": chat_id,
-                    "message_id": msg["message_id"],
-                    "text": db_text
-                }, timeout=10)
-                return
-        new_msg = send_message(chat_id, db_text)
-        if new_msg and new_msg.get("ok"):
-            msg_id = new_msg["result"]["message_id"]
-            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "disable_notification": True
-            }, timeout=10)
-    except Exception as e:
-         print(f"DB write warning: {e}")
-
-def get_db():
-    owner_db = read_db_from_chat(OWNER_ID)
-    if not owner_db:
-        owner_db = read_db_from_chat(GROUP_ID)
-        if owner_db:
-            write_db_to_chat(OWNER_ID, owner_db)
-            try:
-                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
-                if res.get("ok") and "pinned_message" in res["result"]:
-                    msg = res["result"]["pinned_message"]
-                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-            except Exception: pass
-            
-    if not owner_db:
-        return {
-            "allowed_users": [OWNER_ID], 
-            "pending_requests": [],
-            "rejection_sticker": None,
-            "owner_state": None
-        }
-        
-    needs_write = False
-    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
-    for k in legacy_keys:
-        if k in owner_db:
-            owner_db.pop(k, None)
-            needs_write = True
-            
-    if "allowed_users" not in owner_db: 
-        owner_db["allowed_users"] = [OWNER_ID]
-        needs_write = True
-    if "pending_requests" not in owner_db: 
-        owner_db["pending_requests"] = []
-        needs_write = True
-        
-    if needs_write:
-        write_db_to_chat(OWNER_ID, owner_db)
-        
-    return owner_db
-
-def save_db(db):
-    write_db_to_chat(OWNER_ID, db)
-
-def is_user_allowed(user_id):
-    if user_id == OWNER_ID: return True
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
-    return False
-
-def is_action_permitted(chat_id, user_id):
-    if user_id == OWNER_ID: return True
-    if str(chat_id) == GROUP_ID: return True
-    if is_user_allowed(user_id): return True
-    return False
-
-def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
-    db = get_db()
-    allowed = db.get("allowed_users", [])
-    exists = False
-    for i, u in enumerate(allowed):
-        if isinstance(u, int) and u == user_id:
-            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
-            exists = True
-            break
-        elif isinstance(u, dict) and u.get("user_id") == user_id:
-            u["first_name"] = first_name
-            u["username"] = username
-            u["chat_title"] = chat_title
-            exists = True
-            break
-    if not exists:
-        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
-    db["allowed_users"] = allowed
-    save_db(db)
-
-def add_pending_request(user_id, first_name, username, chat_title):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    if not any(p["user_id"] == user_id for p in pending):
-        pending.append({
-            "user_id": user_id,
-            "first_name": first_name,
-            "username": username,
-            "chat_title": chat_title
-        })
-        db["pending_requests"] = pending
-        write_db_to_chat(OWNER_ID, db)
-
-def remove_pending_request(user_id):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    pending = [p for p in pending if p["user_id"] != user_id]
-    db["pending_requests"] = pending
-    write_db_to_chat(OWNER_ID, db)
-
-def send_access_request_menu(chat_id, user_id):
-    keyboard = [[{"text": "🔑 Request Access", "callback_data": f"req_access_{user_id}"}]]
-    send_message_with_keyboard(chat_id, "⚠️ Access Denied. You do not have permission to use this bot.", {"inline_keyboard": keyboard})
-
-def run_miniupdate_extraction_details(version):
-    """Processes version changes and formats details for Telegram transmission."""
-    new_text, active_version, base_url = get_file_info_data_exact(version)
-    if not new_text:
-        return f"❌ Version <b>{version}</b> not found.", None, {}
-
-    prev_versions = []
-    current_temp = active_version
-    for _ in range(6):
-        prev_ver = get_previous_version(current_temp)
-        if not prev_ver: break
-        prev_versions.append(prev_ver)
-        current_temp = prev_ver
-
-    fetched_maps = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
-
-    old_files_map = {}
-    for old_text in reversed(old_texts):
-        for line in old_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 3:
-                file_id = parts[0].strip()
-                try: sz = int(parts[2])
-                except Exception: sz = 0
-                old_files_map[file_id] = sz
-
-    file_entries = []
-    total_size = 0
-    new_files_count = 0
-    changed_files_count = 0
-
-    for line in new_text.splitlines():
-        if not line.strip(): continue
-        parts = line.split(',')
-        if len(parts) < 5: continue
-        file_id, size_str = parts[0].strip(), parts[2].strip()
-        try: size = int(size_str)
-        except Exception: size = 0
-        
-        if file_id in old_files_map:
-            if old_files_map[file_id] != size: 
-                status = "Modified"
-                changed_files_count += 1
-                total_size += size
-                file_entries.append((file_id, status, size))
-        else: 
-            status = "New"
-            new_files_count += 1
-            total_size += size
-            file_entries.append((file_id, status, size))
-
-    size_mb = round(total_size / (1024 * 1024), 2)
-    
-    msg = [
-        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
-        "│",
-        f"├ 🟢 Version Extracted: <b>{version}</b>",
-        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
-        f"├ Changed Files Count: <b>{changed_files_count}</b>",
-        f"├ New Files Count: <b>{new_files_count}</b>",
-        "│",
-        "├ 📂 DISCOVERED FILES:"
-    ]
-    
-    max_visible_files = 15
-    msg.append("<blockquote>")
-    for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
-        sz_kb = round(sz / 1024, 1)
-        if sz_kb >= 1024:
-            sz_display = f"{round(sz_kb / 1024, 2)} MB"
-        else:
-            sz_display = f"{sz_kb} KB"
-            
-        clean_fid = fid.split('/')[-1]
-        clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        
-        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
-        msg.append(f"      <i>({stat}, {sz_display})</i>")
-        
-    if len(file_entries) > max_visible_files:
-        msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
-    msg.append("</blockquote>")
-
-    new_items = []
-    try:
-        new_items = extract_new_game_items(version, new_text)
-    except Exception: pass
-
-    if new_items:
-        msg.append("│")
-        msg.append("├ ✨ NEW GAME ITEMS:")
-        msg.append("<blockquote>")
-        for idx, item in enumerate(new_items[:12], 1):
-            clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
-            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
-        if len(new_items) > 12:
-            msg.append(f"... and {len(new_items) - 12} more items.")
-        msg.append("</blockquote>")
-
-    msg.append("╰──────────────────────")
-    
-    file_keyboard_mappings = {}
-    for file_id, stat, sz in file_entries[:5]:
-        mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
-        suffix = None
-        for line in new_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 5 and parts[0].strip() == file_id:
-                suffix = parts[4].strip()
-                break
-        if suffix:
-            encoded = encode_suffix(suffix)
-            download_url = f"{base_url}{version}/gameassetbundles/{file_id}.{encoded}~3D"
-            BOT_TEMP_MAPPINGS[mapping_id] = {
-                "url": download_url,
-                "filename": file_id.split('/')[-1],
-                "version": version
-            }
-            file_keyboard_mappings[file_id] = mapping_id
-            
-    return "\n".join(msg), file_entries, file_keyboard_mappings
-
-def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=None, filename="bundle.unity3d"):
-    try:
-        if is_local_upload and upload_bytes:
-            files = {'asset_bundle': (filename, upload_bytes, 'application/octet-stream')}
-            res = http_session.post(EXTRACTOR_API_URL, files=files, timeout=45)
-        else:
-            encoded_url = base64.urlsafe_b64encode(file_path_or_url.encode('utf-8')).decode('utf-8')
-            res = http_session.get(f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}", timeout=45)
-        
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("files", []) or data.get("assets", [])
-    except Exception as e:
-        print(f"Parse bundle processing failed: {e}")
-    return []
-
-def send_extracted_document_to_chat(chat_id, file_bytes, filename):
-    url = f"{TELEGRAM_API}/sendDocument"
-    files = {"document": (filename, file_bytes, 'application/octet-stream')}
-    payload = {"chat_id": chat_id}
-    try:
-        http_session.post(url, data=payload, files=files, timeout=45)
-    except Exception as e:
-         print(f"Error sending document: {e}")
-
-def clear_reply_markup(chat_id, message_id):
-    url = f"{TELEGRAM_API}/editMessageReplyMarkup"
+def send_telegram_message(chat_id, text):
+    """Sends a formatted HTML text message via Telegram Bot API"""
+    url = f"{TELEGRAM_API}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "message_id": message_id,
-        "reply_markup": {"inline_keyboard": []}
+        "text": text,
+        "parse_mode": "HTML"
     }
     try:
-        http_session.post(url, json=payload, timeout=5)
-    except Exception: pass
+        http_session.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Failed sending Telegram log update: {e}")
 
-def delete_message(chat_id, message_id):
-    url = f"{TELEGRAM_API}/deleteMessage"
+def send_latest_version_to_telegram(chat_id):
+    """Scans and replies with the current active version metrics directly to Telegram"""
     try:
-        http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
-    except Exception: pass
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
+            candidates = [base_ver]
+            for step in [1, 2, 3]:
+                nxt = get_next_version(base_ver, step)
+                if nxt:
+                    candidates.append(nxt)
+            fetched_maps = get_multiple_file_info_data(candidates)
+            active_ver = base_ver
+            for cand in reversed(candidates):
+                if cand in fetched_maps:
+                    active_ver = cand
+                    break
+            target_ver = get_next_version(active_ver, 1)
+            msg = (
+                f"🎯 <b>Latest Live Active Version:</b>\n"
+                f"• Active Version: <code>{active_ver}</code>\n"
+                f"• Next Tracked: <code>{target_ver}</code>"
+            )
+            send_telegram_message(chat_id, msg)
+            return
+    except Exception as e:
+        print(f"Error pulling latest version on Telegram request: {e}")
+    send_telegram_message(chat_id, "⚠️ Failed to query latest version metrics from server API.")
 
+def run_version_check_to_telegram(chat_id, version):
+    """Runs a lookup for the version and replies with reference statistics to Telegram"""
+    new_text, active_version, base_url = get_file_info_data_exact(version)
+    if not new_text:
+        send_telegram_message(chat_id, f"❌ Version <code>{version}</code> logs are missing on servers.")
+        return
+        
+    lines = new_text.splitlines()
+    total_assets = len([l for l in lines if l.strip()])
+    
+    msg = (
+        f"📦 <b>Discovered Package Status:</b>\n"
+        f"• Active Version: <code>{active_version}</code>\n"
+        f"• Suffix Base URL: <code>{base_url}</code>\n"
+        f"• Total File references: <b>{total_assets} files found</b>\n\n"
+        f"Please open the dashboard web panel to view structured assets, visual previews, and download compiled ZIP files."
+    )
+    send_telegram_message(chat_id, msg)
 
-# ==========================================
-# Flask Controller & Explicit Webhook Routes
-# ==========================================
+# API Endpoints
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    check_api_health()
+    return jsonify({
+        "status": HEALTH_STATUS['status'],
+        "apis": {
+            "version_api": HEALTH_STATUS['version_api'],
+            "extractor_api": HEALTH_STATUS['extractor_api'],
+            "file_sources": HEALTH_STATUS['file_sources']
+        },
+        "last_check": HEALTH_STATUS['last_check'],
+        "uptime": HEALTH_STATUS['uptime'],
+        "cache_stats": {
+            "file_info_cache_size": len(FILE_INFO_CACHE),
+            "extracted_files_cache_size": len(EXTRACTED_FILES_CACHE),
+            "memory_asset_cache_size": len(MEMORY_ASSET_CACHE)
+        }
+    }), 200
 
 @app.route('/api/webhook', methods=['GET', 'POST'])
 @app.route('/webhook', methods=['GET', 'POST'])
@@ -1465,31 +1245,38 @@ def telegram_webhook_route_entry():
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'OPTIONS'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'OPTIONS'])
 def handle_all_requests(path):
+    """Main request handler"""
     if request.method == 'OPTIONS':
         return '', 204
-        
+    
     full_path = "/" + path.strip("/")
     action = request.args.get('action')
     
-    if full_path == '/api/process' or full_path == '/process' or action == 'process':
+    # Process file extraction
+    if full_path == '/api/process' or action == 'process':
         return process_file_logic()
-    elif full_path == '/api/latest-version' or full_path == '/latest-version' or action == 'latest-version':
-        return latest_version_logic()
-    elif full_path == '/api/update' or full_path == '/update' or action == 'update':
+    # Check for updates
+    elif full_path == '/api/update' or action == 'update':
         return check_update_logic()
-    elif full_path == '/api/bulk-zip' or full_path == '/bulk-zip' or action == 'bulk-zip':
-        version = request.args.get('version', '').strip()
-        return bulk_zip_logic(version)
-    elif full_path == '/api/extract-zip' or full_path == '/extract-zip' or action == 'extract-zip':
+    # Get latest version
+    elif full_path == '/api/latest-version' or action == 'latest-version':
+        return latest_version_logic()
+    # Stream cached asset (supports action parameters or URL suffix)
+    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/') or action == 'stream':
+        token = request.args.get('token')
+        if not token:
+            token = full_path.split('/')[-1]
+        return stream_cache_logic(token)
+    # Extract and download as ZIP
+    elif full_path == '/api/extract-zip' or action == 'extract-zip':
         token = request.args.get('token')
         return extract_zip_logic(token)
-    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/'):
-        token = full_path.split('/')[-1]
-        return stream_cache_logic(token)
-    elif action == 'stream':
-        return stream_cache_logic(request.args.get('token'))
-
-    if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
+    # Bulk download all files as ZIP
+    elif full_path == '/api/bulk-zip' or action == 'bulk-zip':
+        version = request.args.get('version', '').strip()
+        return bulk_zip_logic(version)
+    # Serve index.html
+    elif full_path == '/' or full_path == '/api' or full_path == '/api/':
         try:
             for filename in ['api/index.html', 'public/index.html', 'index.html']:
                 if os.path.exists(filename):
@@ -1498,9 +1285,8 @@ def handle_all_requests(path):
             return jsonify({"success": False, "message": "index.html template missing"}), 404
         except Exception as e:
             return f"Error: {str(e)}", 500
-
+    
     return jsonify({"success": False, "message": f"Endpoint '{full_path}' is unmapped."}), 404
-
 
 def handle_bot_webhook():
     try:
@@ -1949,6 +1735,3 @@ def handle_bot_webhook():
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
-
-if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)
