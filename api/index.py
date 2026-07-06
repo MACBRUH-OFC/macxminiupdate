@@ -371,12 +371,11 @@ def extract_new_game_items(active_version, new_text):
     return grouped_items
 
 def analyze_update_purpose(files, new_items):
-    """Parses file changes to deduce semantic intentions for the update briefing."""
     categories = set()
     highlights = []
     
     obj_count = sum(1 for f in files if f["fileName"].lower().endswith(".obj"))
-    png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg"]))
+    png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]))
     config_count = sum(1 for f in files if "config/" in f["fileName"].lower())
     loc_count = sum(1 for f in files if "localization/" in f["fileName"].lower())
     sound_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".ogg", ".wav", ".mp3"]))
@@ -564,7 +563,7 @@ def handle_extractor_response(response):
 
     assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
     
-    # 3D Mesh Assembly and Texture Alignment
+    # Process textures and meshes mapping
     meshes = [a for a in assets_list if (a.get("name") or a.get("fileName") or "").lower().endswith(".obj")]
     textures = [a for a in assets_list if any((a.get("name") or a.get("fileName") or "").lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
     
@@ -573,13 +572,12 @@ def handle_extractor_response(response):
         matched_textures = []
         for t in textures:
             t_name = os.path.splitext(t.get("name") or t.get("fileName") or "")[0].lower()
-            # Link texture if naming overlapping or close matching exists
             if m_name in t_name or t_name in m_name or m_name.replace("_mesh", "") in t_name:
-                t_token = encode_token(t.get("preview_url") or t.get("url"), t_name, get_mime_type(t_name))
+                t_token = encode_token(t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_name.encode()).hexdigest()}", t_name, get_mime_type(t_name), base64.b64decode(t.get("data", "")) if t.get("data") else None)
                 matched_textures.append(f"/api?action=stream&token={t_token}")
         m["associated_textures"] = matched_textures
 
-    # Assemble composite groups based on common prefix groups
+    # Assemble prefix group siblings for composite loading
     from collections import defaultdict
     prefix_groups = defaultdict(list)
     for m in meshes:
@@ -595,20 +593,23 @@ def handle_extractor_response(response):
         if len(group_meshes) > 1:
             for m in group_meshes:
                 m["composite_group"] = prefix
-                m["composite_parts"] = [
-                    {
-                        "name": other.get("name") or other.get("fileName"),
-                        "url": f"/api?action=stream&token={encode_token(other.get('preview_url') or other.get('url'), other.get('name') or other.get('fileName'), 'application/octet-stream')}",
+                m_other_parts = []
+                for other in group_meshes:
+                    if other == m:
+                        continue
+                    o_name = other.get("name") or other.get("fileName") or ""
+                    o_url = other.get("preview_url") or other.get("url") or f"https://local-placeholder/{hashlib.md5(o_name.encode()).hexdigest()}"
+                    o_bytes = base64.b64decode(other.get("data", "")) if other.get("data") else None
+                    o_token = encode_token(o_url, o_name, 'application/octet-stream', o_bytes)
+                    m_other_parts.append({
+                        "name": o_name,
+                        "url": f"/api?action=stream&token={o_token}",
                         "associated_textures": other.get("associated_textures", [])
-                    }
-                    for other in group_meshes if other != m
-                ]
+                    })
+                m["composite_parts"] = m_other_parts
 
+    processed_assets = []
     for asset in assets_list:
-        remote_preview_url = asset.get("preview_url") or asset.get("url")
-        if not remote_preview_url: continue
-        if remote_preview_url.startswith('/'):
-            remote_preview_url = "https://ff-asset-extractor.vercel.app" + remote_preview_url
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
         detected_content_type = get_mime_type(filename_str)
         
@@ -618,23 +619,33 @@ def handle_extractor_response(response):
         except Exception:
             file_bytes = b""
 
+        remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
+        if not remote_preview_url:
+            if not file_bytes:
+                continue
+            dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
+            remote_preview_url = f"https://local-placeholder/{dummy_hash}"
+
         local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
+        
         global MEMORY_ASSET_CACHE
         MEMORY_ASSET_CACHE[cache_key] = {
             "content": file_bytes,
             "filename": filename_str,
             "content_type": detected_content_type
         }
-        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
-        if "preview_url" in asset: asset["preview_url"] = local_proxy_route
-        if "url" in asset: asset["url"] = local_proxy_route
         
-    if "files" not in extractor_data and "assets" in extractor_data:
-        extractor_data["files"] = extractor_data["assets"]
-    elif "assets" not in extractor_data and "files" in extractor_data:
-        extractor_data["assets"] = extractor_data["files"]
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
+        asset["preview_url"] = local_proxy_route
+        asset["url"] = local_proxy_route
+        processed_assets.append(asset)
+
+    # Re-map fully processed lists
+    extractor_data["assets"] = processed_assets
+    extractor_data["files"] = processed_assets
+
     return jsonify(extractor_data), 200
 
 def process_file_logic():
@@ -1024,7 +1035,6 @@ def run_miniupdate_extraction_details(version):
 
     size_mb = round(total_size / (1024 * 1024), 2)
     
-    # Run Semantic Update Analysis
     simple_file_list = [{"fileName": entry[0]} for entry in file_entries]
     new_items = []
     try:
@@ -1326,7 +1336,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": msg_id,
+                        "message_id": sent_msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
@@ -1671,4 +1681,3 @@ def handle_bot_webhook():
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
-    
