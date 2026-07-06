@@ -743,8 +743,6 @@ def check_update_logic():
         "timestamp": datetime.now().isoformat()
     })
 
-# ... Rest of the functions remain the same, with added timeout parameters ...
-
 def check_name_similarity(name1, name2):
     """Check name similarity"""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
@@ -796,7 +794,469 @@ def find_references_in_json(obj, asset_names):
     
     return referenced
 
-# API Health Check Endpoint
+def handle_extractor_response(response):
+    """Handle extractor API response"""
+    if not response.ok:
+        try:
+            err_data = response.json()
+        except Exception:
+            err_data = {"error": response.text}
+        return jsonify(err_data), response.status_code
+    
+    try:
+        extractor_data = response.json()
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Invalid JSON returned from extractor: {str(e)}"}), 500
+    
+    assets_list = (
+        extractor_data.get("assets") or 
+        extractor_data.get("files") or 
+        extractor_data.get("extracted") or 
+        extractor_data.get("data")
+    )
+    if not isinstance(assets_list, list):
+        assets_list = []
+    
+    # Process structured metadata files safely first
+    processed_assets = []
+    for asset in assets_list:
+        filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
+        detected_content_type = get_mime_type(filename_str)
+        
+        structured_data = None
+        for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
+            val = asset.get(key)
+            if val is not None:
+                if isinstance(val, (dict, list)):
+                    structured_data = val
+                    break
+                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
+                    try:
+                        structured_data = json.loads(val)
+                        break
+                    except Exception:
+                        pass
+        
+        file_bytes = b""
+        if structured_data is not None:
+            try:
+                json_str = json.dumps(structured_data, indent=2, ensure_ascii=False)
+                file_bytes = json_str.encode('utf-8')
+                detected_content_type = "application/json"
+            except Exception:
+                file_bytes = b""
+        else:
+            raw_val = asset.get("data", "")
+            if isinstance(raw_val, str) and raw_val:
+                try:
+                    file_bytes = base64.b64decode(raw_val)
+                except Exception:
+                    file_bytes = raw_val.encode('utf-8')
+        
+        remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
+        if not remote_preview_url:
+            if not file_bytes:
+                file_bytes = b"{}"
+                detected_content_type = "application/json"
+            dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
+            remote_preview_url = f"https://local-placeholder/{dummy_hash}"
+        
+        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
+        decoded = decode_token(local_cache_token)
+        cache_key = decoded.get("cache_key") if decoded else local_cache_token
+        
+        MEMORY_ASSET_CACHE[cache_key] = {
+            "content": file_bytes,
+            "filename": filename_str,
+            "content_type": detected_content_type
+        }
+        
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
+        asset["preview_url"] = local_proxy_route
+        asset["url"] = local_proxy_route
+        asset["fileName"] = filename_str
+        asset["label"] = detected_content_type
+        processed_assets.append(asset)
+    
+    # Separate assets by visual groups to scan data reference connections
+    meshes = [a for a in processed_assets if a["fileName"].lower().endswith(".obj")]
+    textures = [a for a in processed_assets if any(a["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
+    materials = [a for a in processed_assets if "material" in a["fileName"].lower() or "material" in (a.get("type") or "").lower()]
+    renderers = [a for a in processed_assets if "renderer" in a["fileName"].lower() or "renderer" in (a.get("type") or "").lower()]
+    
+    # 1. Parse Materials to find referenced textures
+    material_to_textures = {}
+    for mat in materials:
+        mat_name = os.path.splitext(os.path.basename(mat["fileName"]))[0].lower()
+        mat_cache_key = mat["url"].split("token=")[-1]
+        mat_item = MEMORY_ASSET_CACHE.get(mat_cache_key)
+        if mat_item:
+            try:
+                mat_json = json.loads(mat_item["content"].decode('utf-8'))
+                referenced = find_references_in_json(mat_json, [t["fileName"] for t in textures])
+                if referenced:
+                    material_to_textures[mat_name] = referenced
+            except Exception:
+                pass
+    
+    # 2. Parse Renderers to map meshes to materials
+    mesh_to_materials = {}
+    for rend in renderers:
+        rend_cache_key = rend["url"].split("token=")[-1]
+        rend_item = MEMORY_ASSET_CACHE.get(rend_cache_key)
+        if rend_item:
+            try:
+                rend_json = json.loads(rend_item["content"].decode('utf-8'))
+                ref_meshes = find_references_in_json(rend_json, [m["fileName"] for m in meshes])
+                ref_mats = find_references_in_json(rend_json, [mt["fileName"] for mt in materials])
+                for rm in ref_meshes:
+                    rm_name = os.path.splitext(os.path.basename(rm))[0].lower()
+                    for rmat in ref_mats:
+                        rmat_name = os.path.splitext(os.path.basename(rmat))[0].lower()
+                        mesh_to_materials[rm_name] = rmat_name
+            except Exception:
+                pass
+    
+    # 3. Associate Textures with Meshes using Compiled reference pathways
+    for m in meshes:
+        m_name = os.path.splitext(os.path.basename(m["fileName"]))[0].lower()
+        matched_textures = []
+        
+        target_mat = mesh_to_materials.get(m_name)
+        if target_mat and target_mat in material_to_textures:
+            for tex_file in material_to_textures[target_mat]:
+                for t in textures:
+                    if t["fileName"].lower() == tex_file.lower():
+                        matched_textures.append(t["url"])
+        
+        if not matched_textures:
+            for t in textures:
+                t_name = os.path.splitext(os.path.basename(t["fileName"]))[0].lower()
+                if check_name_similarity(m_name, t_name):
+                    matched_textures.append(t["url"])
+        
+        m["associated_textures"] = matched_textures
+    
+    # Group sibling parts for concurrent rendering using semantic checks
+    composites = []
+    used_meshes_in_composites = set()
+    
+    for i, m1 in enumerate(meshes):
+        if m1["fileName"] in used_meshes_in_composites:
+            continue
+        m1_basename = os.path.basename(m1["fileName"])
+        m1_name = os.path.splitext(m1_basename)[0].lower()
+        
+        siblings = []
+        for j, m2 in enumerate(meshes):
+            if i == j:
+                continue
+            m2_name = os.path.splitext(os.path.basename(m2["fileName"]))[0].lower()
+            if check_name_similarity(m1_name, m2_name):
+                siblings.append(m2)
+        
+        if siblings:
+            all_composite_meshes = [m1] + siblings
+            comp_textures = set()
+            comp_parts = []
+            
+            for mesh_obj in all_composite_meshes:
+                used_meshes_in_composites.add(mesh_obj["fileName"])
+                for tex_url in mesh_obj["associated_textures"]:
+                    comp_textures.add(tex_url)
+            
+            for mesh_obj in siblings:
+                comp_parts.append({
+                    "name": os.path.basename(mesh_obj["fileName"]),
+                    "url": mesh_obj["url"],
+                    "associated_textures": mesh_obj["associated_textures"]
+                })
+            
+            composites.append({
+                "id": f"comp_{i}",
+                "name": f"{m1_basename.split('.')[0]} (Assembly Scene)",
+                "type": "Composite 3D Assembly",
+                "url": m1["url"],
+                "associated_textures": list(comp_textures),
+                "composite_parts": comp_parts,
+                "preview_summary": f"Unified assembly of {len(all_composite_meshes)} structural mesh layers and {len(comp_textures)} mapped shader textures."
+            })
+    
+    # Group categorized explorer categories cleanly
+    categories = {
+        "3d_models": [m for m in meshes if m["fileName"] not in used_meshes_in_composites],
+        "textures": textures,
+        "materials": materials,
+        "animations": [a for a in processed_assets if "animation" in a["fileName"].lower() or "animator" in a["fileName"].lower()],
+        "configs": [a for a in processed_assets if any(ext in a["fileName"].lower() for ext in [".json", ".txt", ".dat", ".xml"]) and not any(a["fileName"] == m["fileName"] for m in meshes)],
+        "others": []
+    }
+    
+    for asset in processed_assets:
+        is_categorized = (
+            any(asset["fileName"] == m["fileName"] for m in meshes) or
+            any(asset["fileName"] == t["fileName"] for t in textures) or
+            any(asset["fileName"] == mat["fileName"] for mat in materials) or
+            any(asset["fileName"] == anim["fileName"] for anim in categories["animations"]) or
+            any(asset["fileName"] == conf["fileName"] for conf in categories["configs"])
+        )
+        if not is_categorized:
+            categories["others"].append(asset)
+    
+    response_data = {
+        "success": True,
+        "composites": composites,
+        "categories": categories,
+        "assets": processed_assets
+    }
+    return jsonify(response_data), 200
+
+def process_file_logic():
+    """Process/extract file logic"""
+    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
+    token = request.args.get('token', '') or request.form.get('token', '')
+    real_bundle_url = ""
+    
+    if "token=" in bundle_url:
+        token_match = re.search(r'token=([^&]+)', bundle_url)
+        if token_match:
+            tok = token_match.group(1)
+            decoded = decode_token(tok)
+            if decoded:
+                real_bundle_url = decoded.get("url", "")
+    elif token:
+        decoded = decode_token(token)
+        if decoded:
+            real_bundle_url = decoded.get("url", "")
+    
+    if not real_bundle_url and bundle_url.startswith("http"):
+        real_bundle_url = bundle_url
+    
+    if 'file' in request.files:
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            files = {
+                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
+            }
+            data = {
+                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
+            }
+            try:
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                return handle_extractor_response(response)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
+    
+    if real_bundle_url:
+        try:
+            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            response = http_session.get(extractor_url, timeout=45)
+            return handle_extractor_response(response)
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
+    
+    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
+
+def stream_cache_logic(token):
+    """Stream cached asset logic"""
+    if not token:
+        return "Missing token query parameter", 400
+    
+    decoded = decode_token(token)
+    if not decoded:
+        return "Expired or invalid stream token payload.", 404
+    
+    filename = decoded.get("filename", "file")
+    mime_type = decoded.get("content_type", "application/octet-stream")
+    cache_key = decoded.get("cache_key")
+    
+    if cache_key and cache_key in MEMORY_ASSET_CACHE:
+        cached_item = MEMORY_ASSET_CACHE[cache_key]
+        response = Response(cached_item["content"], mimetype=mime_type)
+        response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+    
+    if "content_b64" in decoded:
+        try:
+            content = base64.b64decode(decoded["content_b64"])
+            if cache_key:
+                MEMORY_ASSET_CACHE[cache_key] = {
+                    "content": content,
+                    "filename": filename,
+                    "content_type": mime_type
+                }
+            response = Response(content, mimetype=mime_type)
+            response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+            response.headers["Accept-Ranges"] = "bytes"
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        except Exception:
+            pass
+    
+    remote_url = decoded.get("url")
+    if remote_url:
+        try:
+            res = http_session.get(remote_url, timeout=15)
+            if res.status_code == 200:
+                if cache_key:
+                    MEMORY_ASSET_CACHE[cache_key] = {
+                        "content": res.content,
+                        "filename": filename,
+                        "content_type": mime_type
+                    }
+                response = Response(res.content, mimetype=mime_type)
+                response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+                response.headers["Accept-Ranges"] = "bytes"
+                response.headers["Access-Control-Allow-Origin"] = "*"
+                return response
+        except Exception:
+            pass
+    
+    return "Expired or unavailable stream token payload.", 404
+
+def extract_zip_logic(token):
+    """Extract and download as ZIP logic"""
+    if not token:
+        return "Missing token query parameter", 400
+    
+    decoded = decode_token(token)
+    if not decoded:
+        return "Invalid or expired stream token payload", 400
+    
+    remote_url = decoded.get("url")
+    if not remote_url:
+        return "Target bundle address missing in decrypted token payload", 400
+    
+    encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
+    extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+    
+    try:
+        res = http_session.get(extractor_url, timeout=60, stream=True)
+        if res.status_code == 200:
+            filename = decoded.get("filename", "extracted_asset") + ".zip"
+            def generate():
+                for chunk in res.iter_content(chunk_size=8192):
+                    yield chunk
+            response = Response(generate(), mimetype='application/zip')
+            response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        else:
+            return f"Extractor pipeline failure status code: {res.status_code}", 500
+    except Exception as e:
+        return f"Failed connecting proxy mapping to zip extractor endpoint: {e}", 500
+
+def bulk_zip_logic(version):
+    """Bulk ZIP download logic"""
+    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
+        return "Incorrect version format entered", 400
+    
+    new_text, active_version, base_url = get_file_info_data(version)
+    if not new_text:
+        return "Target version logs missing from server", 404
+    
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver:
+            break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+    
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+    
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try:
+                    old_size = int(parts[2])
+                except Exception:
+                    old_size = 0
+                old_files_map[file_id] = old_size
+    
+    targets = []
+    for line in new_text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(',')
+        if len(parts) < 5:
+            continue
+        
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix:
+            continue
+        
+        try:
+            size = int(size_str)
+        except Exception:
+            size = 0
+        
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size:
+                pass
+            else:
+                continue
+        else:
+            pass
+        
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        targets.append((file_id, download_url))
+    
+    if not targets:
+        return "No assets could be extracted for this version update", 400
+    
+    zip_io = io.BytesIO()
+    files_added_to_zip = 0
+    
+    def concurrent_fetch_and_extract(target):
+        file_id, d_url = target
+        try:
+            encoded_url = base64.urlsafe_b64encode(d_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            res = http_session.get(extractor_url, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                return file_id, data.get("files", []) or data.get("assets", [])
+        except Exception as e:
+            print(f"Error parallel extracting {file_id}: {e}")
+        return file_id, []
+    
+    with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures_map = executor.map(concurrent_fetch_and_extract, targets)
+            for file_id, extracted_files in futures_map:
+                for ext_file in extracted_files:
+                    fname = ext_file.get("name")
+                    zpath = ext_file.get("path") or fname
+                    b64_content = ext_file.get("data", "")
+                    if b64_content and fname:
+                        try:
+                            file_bytes = base64.b64decode(b64_content)
+                            zf.writestr(f"{file_id}_extracted/{zpath}", file_bytes)
+                            files_added_to_zip += 1
+                        except Exception:
+                            pass
+    
+    if files_added_to_zip == 0:
+        return "No assets could be extracted for this version update", 400
+    
+    zip_io.seek(0)
+    response = Response(zip_io.getvalue(), mimetype='application/zip')
+    response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
+    return response
+
+# API Endpoints
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -850,10 +1310,28 @@ def handle_all_requests(path):
     full_path = "/" + path.strip("/")
     action = request.args.get('action')
     
-    if full_path == '/api/update' or action == 'update':
+    # Process file extraction
+    if full_path == '/api/process' or action == 'process':
+        return process_file_logic()
+    # Check for updates
+    elif full_path == '/api/update' or action == 'update':
         return check_update_logic()
+    # Get latest version
     elif full_path == '/api/latest-version' or action == 'latest-version':
         return latest_version_logic()
+    # Stream cached asset
+    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/') or action == 'stream':
+        token = full_path.split('/')[-1] if '/' in full_path else request.args.get('token')
+        return stream_cache_logic(token)
+    # Extract and download as ZIP
+    elif full_path == '/api/extract-zip' or action == 'extract-zip':
+        token = request.args.get('token')
+        return extract_zip_logic(token)
+    # Bulk download all files as ZIP
+    elif full_path == '/api/bulk-zip' or action == 'bulk-zip':
+        version = request.args.get('version', '').strip()
+        return bulk_zip_logic(version)
+    # Serve index.html
     elif full_path == '/' or full_path == '/api' or full_path == '/api/':
         try:
             for filename in ['api/index.html', 'public/index.html', 'index.html']:
