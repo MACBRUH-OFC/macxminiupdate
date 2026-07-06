@@ -24,6 +24,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
 @media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
+/* Expanded layout heights for comfortable visual representation of list elements */
 .uniform-panel { 
     background: #09090d; border: 1px solid #181822; position: relative; 
     box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 680px; display: flex; 
@@ -696,9 +697,15 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         const extractedData = await response.json();
         loader.style.display = "none";
 
+        if (!response.ok) {
+            const errorMsg = extractedData.message || extractedData.error || "Extraction processing pipeline request error.";
+            sublist.innerHTML = `<div class="text-[10px] text-red-500 py-2 text-center font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40">${errorMsg}</div>`;
+            return;
+        }
+
         let targets = extractedData.assets || extractedData.files || [];
-        if (!response.ok || targets.length === 0) {
-            sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1 text-center">No previewable asset components extracted.</div>`;
+        if (targets.length === 0) {
+            sublist.innerHTML = `<div class="text-[9px] text-zinc-600 italic py-1 text-center">No components found inside this asset bundle.</div>`;
             return;
         }
 
@@ -741,7 +748,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         });
     } catch (err) {
         loader.style.display = "none";
-        sublist.innerHTML = `<div class="text-[9px] text-red-500 py-1 text-center">Extraction processing pipeline request error.</div>`;
+        sublist.innerHTML = `<div class="text-[10px] text-red-500 py-2 text-center font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40">${err.message || err}</div>`;
     }
 }
 
