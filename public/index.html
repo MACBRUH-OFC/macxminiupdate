@@ -1178,7 +1178,10 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
+    // item.id already IS the real asset URL (e.g. "/api?action=stream&token=...")
+    // returned by the backend. Use it directly, falling back to a session
+    // cache entry only if one was explicitly stored for this exact URL.
+    let liveSourceData = offlineDataPayloadSessionCache[item.id] || item.id || "";
     const ext = item.name.split('.').pop().toLowerCase();
     const lLabel = item.label.toLowerCase();
 
