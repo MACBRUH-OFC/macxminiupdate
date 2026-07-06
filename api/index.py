@@ -550,6 +550,30 @@ def check_update_logic():
         "analysis": analysis
     })
 
+def check_name_similarity(name1, name2):
+    """Normalized token alignment index mapping mesh names with texture assets safely."""
+    n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
+    n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
+    
+    tokens1 = set(t for t in n1.split() if len(t) > 2)
+    tokens2 = set(t for t in n2.split() if len(t) > 2)
+    
+    ignore_words = {"mesh", "tex", "texture", "preview", "object", "model", "vfx", "part", "material", "mat"}
+    t1_clean = tokens1 - ignore_words
+    t2_clean = tokens2 - ignore_words
+    
+    overlap = t1_clean.intersection(t2_clean)
+    if overlap:
+        return True
+        
+    clean_n1 = "".join(list(t1_clean))
+    clean_n2 = "".join(list(t2_clean))
+    if clean_n1 and clean_n2:
+        if clean_n1 in clean_n2 or clean_n2 in clean_n1:
+            return True
+            
+    return False
+
 def handle_extractor_response(response):
     if not response.ok:
         try: err_data = response.json()
@@ -561,7 +585,14 @@ def handle_extractor_response(response):
     except Exception as e:
         return jsonify({"success": False, "message": f"Invalid JSON returned from extractor: {str(e)}"}), 500
 
-    assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
+    assets_list = (
+        extractor_data.get("assets") or 
+        extractor_data.get("files") or 
+        extractor_data.get("extracted") or 
+        extractor_data.get("data")
+    )
+    if not isinstance(assets_list, list):
+        assets_list = []
     
     # Process textures and meshes mapping
     meshes = [a for a in assets_list if (a.get("name") or a.get("fileName") or "").lower().endswith(".obj")]
@@ -572,7 +603,7 @@ def handle_extractor_response(response):
         matched_textures = []
         for t in textures:
             t_name = os.path.splitext(t.get("name") or t.get("fileName") or "")[0].lower()
-            if m_name in t_name or t_name in m_name or m_name.replace("_mesh", "") in t_name:
+            if check_name_similarity(m_name, t_name):
                 t_url = t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_name.encode()).hexdigest()}"
                 
                 t_data = t.get("data", "")
@@ -588,57 +619,41 @@ def handle_extractor_response(response):
                 matched_textures.append(f"/api?action=stream&token={t_token}")
         m["associated_textures"] = matched_textures
 
-    # Assemble prefix group siblings for composite loading
-    from collections import defaultdict
-    prefix_groups = defaultdict(list)
-    for m in meshes:
-        name = m.get("name") or m.get("fileName") or ""
-        parts = re.split(r'[_-\s]', name)
-        if len(parts) > 1:
-            prefix = "_".join(parts[:3]).lower()
-        else:
-            prefix = name.lower()
-        prefix_groups[prefix].append(m)
-
-    for prefix, group_meshes in prefix_groups.items():
-        if len(group_meshes) > 1:
-            for m in group_meshes:
-                m["composite_group"] = prefix
-                m_other_parts = []
-                for other in group_meshes:
-                    if other == m:
-                        continue
-                    o_name = other.get("name") or other.get("fileName") or ""
-                    o_url = other.get("preview_url") or other.get("url") or f"https://local-placeholder/{hashlib.md5(o_name.encode()).hexdigest()}"
+    # Assemble composite groups based on common semantic name overlap
+    for i, m1 in enumerate(meshes):
+        m1_name = os.path.splitext(m1.get("name") or m1.get("fileName") or "")[0].lower()
+        m1_other_parts = []
+        for j, m2 in enumerate(meshes):
+            if i == j:
+                continue
+            m2_name = os.path.splitext(m2.get("name") or m2.get("fileName") or "")[0].lower()
+            if check_name_similarity(m1_name, m2_name):
+                o_name = m2.get("name") or m2.get("fileName") or ""
+                o_url = m2.get("preview_url") or m2.get("url") or f"https://local-placeholder/{hashlib.md5(o_name.encode()).hexdigest()}"
+                
+                o_data = m2.get("data", "")
+                o_bytes = None
+                if isinstance(o_data, str) and o_data:
+                    try: o_bytes = base64.b64decode(o_data)
+                    except Exception: o_bytes = o_data.encode('utf-8')
+                elif isinstance(o_data, (dict, list)):
+                    try: o_bytes = json.dumps(o_data).encode('utf-8')
+                    except Exception: pass
                     
-                    o_data = other.get("data", "")
-                    o_bytes = None
-                    if isinstance(o_data, str) and o_data:
-                        try: o_bytes = base64.b64decode(o_data)
-                        except Exception: o_bytes = o_data.encode('utf-8')
-                    elif isinstance(o_data, (dict, list)):
-                        try: o_bytes = json.dumps(o_data).encode('utf-8')
-                        except Exception: pass
-                    o_token = encode_token(o_url, o_name, 'application/octet-stream', o_bytes)
-                    m_other_parts.append({
-                        "name": o_name,
-                        "url": f"/api?action=stream&token={o_token}",
-                        "associated_textures": other.get("associated_textures", [])
-                    })
-                m["composite_parts"] = m_other_parts
+                o_token = encode_token(o_url, o_name, 'application/octet-stream', o_bytes)
+                m1_other_parts.append({
+                    "name": o_name,
+                    "url": f"/api?action=stream&token={o_token}",
+                    "associated_textures": m2.get("associated_textures", [])
+                })
+        m1["composite_parts"] = m1_other_parts
 
     processed_assets = []
     for asset in assets_list:
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
         detected_content_type = get_mime_type(filename_str)
         
-        b64_content = asset.get("data", "")
-        try:
-            file_bytes = base64.b64decode(b64_content) if b64_content else b""
-        except Exception:
-            file_bytes = b""
-
-        # Safely capture any nested properties, MonoBehaviours configs, or GameData parsed content
+        # Read structured metadata properties, MonoBehaviour configurations or GameData safely
         structured_data = None
         for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
             val = asset.get(key)
@@ -653,9 +668,10 @@ def handle_extractor_response(response):
                     except Exception:
                         pass
 
+        file_bytes = b""
         if structured_data is not None:
             try:
-                # Pretty print GameData and MonoBehaviours so they display elegantly in the preview box
+                # Format MonoBehaviour metadata and GameData configuration cleanly 
                 json_str = json.dumps(structured_data, indent=2, ensure_ascii=False)
                 file_bytes = json_str.encode('utf-8')
                 detected_content_type = "application/json"
@@ -672,9 +688,10 @@ def handle_extractor_response(response):
         remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
         if not remote_preview_url:
             if not file_bytes:
-                # Provide an empty JSON placeholder to prevent skipping from accordion lists
+                # Still add it with empty placeholder bytes so user can see it in accordion list!
                 file_bytes = b"{}"
                 detected_content_type = "application/json"
+                
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
 
@@ -694,6 +711,7 @@ def handle_extractor_response(response):
         asset["url"] = local_proxy_route
         processed_assets.append(asset)
 
+    # Re-map fully processed lists back
     extractor_data["assets"] = processed_assets
     extractor_data["files"] = processed_assets
 
@@ -1387,7 +1405,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": msg_id,
+                        "message_id": sent_msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
