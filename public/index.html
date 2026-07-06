@@ -1167,8 +1167,12 @@ async function selectFile(item, element) {
     const mediaTypeLabel = document.getElementById('mediaTypeLabel');
     const saveBtn = document.getElementById('singleSaveBtn');
 
-    const name = item.name || item.fileName || "Loading...";
-    const label = item.label || "Processing...";
+    // Decode URI elements safely
+    let id = item.id ? decodeURIComponent(item.id) : "";
+    let url = item.url ? decodeURIComponent(item.url) : "";
+    let name = item.name ? decodeURIComponent(item.name) : (item.fileName ? decodeURIComponent(item.fileName) : "Loading...");
+    let label = item.label ? decodeURIComponent(item.label) : "Processing...";
+
     mediaTitle.innerText = name;
     mediaTypeLabel.innerText = label;
 
@@ -1192,7 +1196,7 @@ async function selectFile(item, element) {
 
         try {
             // Call /api/process to extract the bundle
-            const processUrl = `/api/process?bundle_url=${encodeURIComponent(item.id || item.url)}`;
+            const processUrl = `/api/process?bundle_url=${encodeURIComponent(id || url)}`;
             const processResponse = await fetch(processUrl);
             
             if (!processResponse.ok) {
@@ -1212,7 +1216,7 @@ async function selectFile(item, element) {
             }
 
             // Cache the extracted data
-            offlineDataPayloadSessionCache[item.id || item.url] = extractedData;
+            offlineDataPayloadSessionCache[id || url] = extractedData;
 
             // Display the extracted categories
             if (extractedData.categories && Object.keys(extractedData.categories).length > 0) {
@@ -1232,7 +1236,7 @@ async function selectFile(item, element) {
         }
     } else {
         // Render single extracted asset within viewport using original viewer implementations
-        let liveSourceData = offlineDataPayloadSessionCache[item.id || item.url] || item.id || item.url || "";
+        let liveSourceData = offlineDataPayloadSessionCache[id || url] || id || url || "";
         saveBtn.href = liveSourceData;
         saveBtn.setAttribute('download', name);
 

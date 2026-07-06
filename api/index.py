@@ -133,9 +133,9 @@ def decode_token(token):
         json_bytes = zlib.decompress(compressed)
         decoded = json.loads(json_bytes.decode('utf-8'))
         
-        # Validate token age (24 hour expiry)
+        # Validate token age (30 days expiry)
         token_age = int(time.time()) - decoded.get('timestamp', 0)
-        if token_age > 86400:
+        if token_age > 2592000:
             return None
         
         return decoded
@@ -1134,18 +1134,47 @@ def extract_zip_logic(token):
     extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
     
     try:
-        res = http_session.get(extractor_url, timeout=60, stream=True)
-        if res.status_code == 200:
-            filename = decoded.get("filename", "extracted_asset") + ".zip"
-            def generate():
-                for chunk in res.iter_content(chunk_size=8192):
-                    yield chunk
-            response = Response(generate(), mimetype='application/zip')
-            response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
-        else:
+        res = http_session.get(extractor_url, timeout=60)
+        if res.status_code != 200:
             return f"Extractor pipeline failure status code: {res.status_code}", 500
+        
+        try:
+            data = res.json()
+        except Exception as e:
+            return f"Invalid JSON response returned from extractor: {str(e)}", 500
+            
+        files_list = data.get("files", []) or data.get("assets", []) or data.get("extracted", [])
+        if not isinstance(files_list, list):
+            files_list = []
+            
+        zip_io = io.BytesIO()
+        files_added = 0
+        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+            for ext_file in files_list:
+                fname = ext_file.get("name") or ext_file.get("fileName")
+                zpath = ext_file.get("path") or fname
+                b64_content = ext_file.get("data", "")
+                if b64_content and fname:
+                    try:
+                        file_bytes = base64.b64decode(b64_content)
+                        zf.writestr(zpath, file_bytes)
+                        files_added += 1
+                    except Exception:
+                        pass
+                        
+        if files_added == 0:
+            return "No assets could be extracted from this bundle payload to generate a ZIP", 400
+            
+        zip_io.seek(0)
+        filename = decoded.get("filename", "extracted_asset")
+        if not filename.endswith(".zip"):
+            filename += ".zip"
+            
+        response = Response(zip_io.getvalue(), mimetype='application/zip')
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+        
     except Exception as e:
         return f"Failed connecting proxy mapping to zip extractor endpoint: {e}", 500
 
@@ -1319,9 +1348,11 @@ def handle_all_requests(path):
     # Get latest version
     elif full_path == '/api/latest-version' or action == 'latest-version':
         return latest_version_logic()
-    # Stream cached asset
+    # Stream cached asset (supports action parameters or URL suffix)
     elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/') or action == 'stream':
-        token = full_path.split('/')[-1] if '/' in full_path else request.args.get('token')
+        token = request.args.get('token')
+        if not token:
+            token = full_path.split('/')[-1]
         return stream_cache_logic(token)
     # Extract and download as ZIP
     elif full_path == '/api/extract-zip' or action == 'extract-zip':
