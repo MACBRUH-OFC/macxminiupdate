@@ -39,7 +39,7 @@ FILE_INFO_CACHE = {}
 EXTRACTED_FILES_CACHE = {}
 MEMORY_ASSET_CACHE = {}
 
-# Stateless short-lived in-memory mappings to stop pinned database spam
+# Stateless short-lived in-memory mappings to stop database repinning spam
 BOT_TEMP_MAPPINGS = {}
 PURGED_LEGACY_DB = False
 
@@ -165,7 +165,7 @@ def get_multiple_file_info_data(versions):
     return results
 
 def find_latest_active_version(requested_version):
-    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
+    """Scans the requested version as well as the next 3 versions in parallel on the web."""
     candidates = [requested_version]
     for step in [1, 2, 3]:
         nxt = get_next_version(requested_version, step)
@@ -373,14 +373,113 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
+def generate_update_intelligence(version, files_list, new_items):
+    """Categorizes update files and infers why specific changes were introduced."""
+    vfx_files = []
+    weapon_files = []
+    emote_files = []
+    bundle_files = []
+    config_files = []
+    ui_files = []
+    code_files = []
+    other_files = []
+    
+    weapon_keywords = ['weapon', 'aug', 'm249', 'mp40', 'ak', 'm1014', 'groza', 'famas', 'scar', 'ump', 'thompson', 'woodpecker', 'awm', 'kar98k', 'desert_eagle', 'pistol', 'scythe', 'knife', 'm1887', 'g18', 'usp', 'mac10', 'vector', 'bizon', 'gun', 'skin', 'weaponscopeskin']
+    
+    for f in files_list:
+        name = f["fileName"].lower()
+        if 'vfx' in name:
+            vfx_files.append(f)
+        elif any(kw in name for kw in weapon_keywords):
+            weapon_files.append(f)
+        elif 'emote' in name or 'pose' in name or 'action' in name or 'dance' in name:
+            emote_files.append(f)
+        elif 'bundle' in name or 'outfit' in name or 'costume' in name or 'hair' in name or 'shoes' in name or 'pants' in name or 'shirt' in name or 'suit' in name:
+            bundle_files.append(f)
+        elif 'config' in name or 'itemhotfix' in name or 'lochotfix' in name or 'json' in name or 'xml' in name:
+            config_files.append(f)
+        elif 'ui/' in name or 'shop' in name or 'store' in name or 'banner' in name or 'loading' in name or 'uidraw' in name:
+            ui_files.append(f)
+        elif 'codepatch' in name or 'patch' in name or 'so' in name or 'dll' in name:
+            code_files.append(f)
+        else:
+            other_files.append(f)
+
+    purposes = []
+    if weapon_files or any('weapon' in item['name'].lower() for item in new_items):
+        weapons_detected = []
+        for kw in ['aug', 'm249', 'mp40', 'ak', 'm1014', 'scar', 'awm', 'm1887']:
+            if any(kw in f["fileName"].lower() for f in files_list) or any(kw in item['name'].lower() for item in new_items):
+                weapons_detected.append(kw.upper())
+        weapons_str = f" ({', '.join(weapons_detected)})" if weapons_detected else ""
+        purposes.append(f"🔥 Weapon Skin Launch{weapons_str} - Pushing high-tier visual skins, scoping upgrades, and matching bullet VFX shaders.")
+        
+    if emote_files or any('emote' in item['name'].lower() or 'pose' in item['name'].lower() for item in new_items):
+        purposes.append("💃 Emote & Character Pose Integration - Adding new celebration animations and shop display poses.")
+        
+    if bundle_files or any(item.get('is_bundle') for item in new_items):
+        purposes.append("📦 Outfit Bundle Releases - Deploying multi-component outfit sets, costumes, and skin items to the shop.")
+        
+    if ui_files or any('shop' in f["fileName"].lower() for f in files_list):
+        purposes.append("🎨 Event Shop & Draw UI Update - Updating local draw shops, store banners, and unlimited cardpool interface structures.")
+        
+    if code_files:
+        purposes.append("⚙️ Client Code Hotfix - Deploying system execution compiled patches, local memory performance optimizations, or script fixes.")
+        
+    if not purposes:
+        purposes.append("📦 General Maintenance Update - Synchronizing catalog indexes, local assets, and localization text adjustments.")
+
+    modified_explanations = []
+    modified_files = [f for f in files_list if f.get("status") == "Modified"]
+    new_files = [f for f in files_list if f.get("status") == "New"]
+    
+    for f in modified_files[:4]:
+        name = f["fileName"]
+        if 'config' in name.lower() or 'itemhotfix' in name.lower() or 'lochotfix' in name.lower():
+            modified_explanations.append(f"Updated config entry <b>{name.split('/')[-1]}</b> to synchronize backend item indexes and translations.")
+        elif 'codepatch' in name.lower():
+            modified_explanations.append(f"Re-compiled script patch <b>{name.split('/')[-1]}</b> to implement code corrections or anti-cheat updates.")
+        elif 'vfx' in name.lower():
+            modified_explanations.append(f"Modified VFX bundle <b>{name.split('/')[-1]}</b> to optimize visual effects or adjust asset resolution.")
+        else:
+            modified_explanations.append(f"Updated asset bundle <b>{name.split('/')[-1]}</b> with updated geometry, shaders, or texture maps.")
+            
+    if len(modified_files) > 4:
+        modified_explanations.append(f"And {len(modified_files) - 4} other modified elements updated for client compatibility.")
+
+    total_added = len(new_files)
+    total_modified = len(modified_files)
+    items_count = len(new_items)
+    
+    summary_paragraph = (
+        f"This miniupdate (version {version}) was deployed to synchronize client catalog parameters. "
+        f"It consists of {total_added} brand new asset packages and {total_modified} modified bundles. "
+        f"Specifically, {items_count} premium catalog items were identified in the itemhotfix database. "
+        "The client has received visual and structural updates to support the corresponding events."
+    )
+
+    return {
+        "purposes": purposes,
+        "modified_explanations": modified_explanations,
+        "summary_paragraph": summary_paragraph,
+        "categories": {
+            "weapons_count": len(weapon_files),
+            "vfx_count": len(vfx_files),
+            "emotes_count": len(emote_files),
+            "bundles_count": len(bundle_files),
+            "config_count": len(config_files),
+            "ui_count": len(ui_files),
+            "code_count": len(code_files)
+        }
+    }
+
 def latest_version_logic():
     try:
         res = http_session.get(VERSION_API, timeout=5)
         data = res.json()
         if data.get("success") and "remote_version" in data:
-            base_ver = data["remote_version"]  # e.g., 1.111.6
+            base_ver = data["remote_version"]
             
-            # Concurrently scan base version + next 3 versions in parallel (Auto Radar only)
             candidates = [base_ver]
             for step in [1, 2, 3]:
                 nxt = get_next_version(base_ver, step)
@@ -418,7 +517,6 @@ def check_update_logic():
     if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
         return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
 
-    # Strict exact check for manual search queries (as requested)
     new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
         return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
@@ -475,12 +573,16 @@ def check_update_logic():
         new_items = extract_new_game_items(active_version, new_text)
     except Exception as e:
         print(f"Error parsing game items hotfix: {e}")
+        
+    intelligence = generate_update_intelligence(active_version, file_infos, new_items)
+    
     return jsonify({
         "success": True,
         "version": active_version,
         "totalSize": total_size,
         "files": file_infos,
-        "new_items": new_items
+        "new_items": new_items,
+        "intelligence": intelligence
     })
 
 def handle_extractor_response(response):
@@ -815,7 +917,7 @@ def get_db():
         needs_write = True
         
     if needs_write:
-        write_db_to_chat(OWNER_ID, owner_db)
+        save_db(owner_db)
         
     return owner_db
 
@@ -880,9 +982,24 @@ def remove_pending_request(user_id):
     db["pending_requests"] = pending
     write_db_to_chat(OWNER_ID, db)
 
+def send_access_request_menu(chat_id, user_id):
+    send_message(chat_id, "🔒 Private access verification required. Requesting authentication...")
+    add_pending_request(user_id, "Unknown", "None", "Private Conversation")
+    
+    # Submits automated auth verification triggers to the Owner
+    http_session.post(f"{TELEGRAM_API}/sendMessage", json={
+        "chat_id": OWNER_ID,
+        "text": f"👤 Access authorization query pending from requester profile ID: {user_id}",
+        "reply_markup": {
+            "inline_keyboard": [
+                [{"text": "✅ Approve Request", "callback_data": f"auth_approve_{user_id}"}],
+                [{"text": "❌ Reject Request", "callback_data": f"auth_reject_{user_id}"}]
+            ]
+        }
+    }, timeout=10)
+
 def run_miniupdate_extraction_details(version):
-    """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
-    # Strict exact check for manual search queries (as requested)
+    """Processes version changes and formats structured details with integrated intelligence analysis."""
     new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
         return f"❌ Version <b>{version}</b> not found.", None, {}
@@ -910,7 +1027,7 @@ def run_miniupdate_extraction_details(version):
                 old_files_map[file_id] = sz
 
     file_entries = []
-    total_size = 0 # Sum of only updated (Modified + New) files as clarified by the user
+    total_size = 0
     new_files_count = 0
     changed_files_count = 0
 
@@ -936,20 +1053,38 @@ def run_miniupdate_extraction_details(version):
 
     size_mb = round(total_size / (1024 * 1024), 2)
     
+    new_items = []
+    try:
+        new_items = extract_new_game_items(version, new_text)
+    except Exception: pass
+
+    # Run Intelligence Generation to analyze purposes
+    file_infos_temp = [{"fileName": fe[0], "status": fe[1], "size": fe[2]} for fe in file_entries]
+    intelligence = generate_update_intelligence(version, file_infos_temp, new_items)
+
     msg = [
-        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
+        "<b>╭─📊 MINIUPDATE INTELLIGENCE REPORT ────</b>",
         "│",
-        f"├ 🟢 Version Extracted: <b>{version}</b>",
-        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
-        f"├ Changed Files Count: <b>{changed_files_count}</b>",
-        f"├ New Files Count: <b>{new_files_count}</b>",
+        f"├ 🟢 Target Version: <b>{version}</b>",
+        f"├ Active File Updates Size: <b>{size_mb} MB</b>",
+        f"├ Packages Added: <b>{new_files_count}</b> | Modified: <b>{changed_files_count}</b>",
         "│",
-        "├ 📂 DISCOVERED FILES:"
+        "├ 🧠 <b>PATCH INTEL FOCUS SUMMARY:</b>"
     ]
     
-    max_visible_files = 15
-    # Encapsulate listings in native Telegram blockquotes for premium visualization
+    for purpose in intelligence["purposes"][:3]:
+        msg.append(f"│  ▫️ {purpose}")
+    msg.append("│")
+    
+    if intelligence["modified_explanations"]:
+        msg.append("├ 🔧 <b>NOTABLE SYSTEM ALTERATIONS:</b>")
+        for expl in intelligence["modified_explanations"][:3]:
+            msg.append(f"│  ▫️ {expl}")
+        msg.append("│")
+
+    msg.append("├ 📂 DISCOVERED FILES SUMMARY:")
     msg.append("<blockquote>")
+    max_visible_files = 12
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
         sz_kb = round(sz / 1024, 1)
         if sz_kb >= 1024:
@@ -959,36 +1094,25 @@ def run_miniupdate_extraction_details(version):
             
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        
-        # Removed vertical guides inside blockquote block to prevent double border lines
-        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
-        msg.append(f"      <i>({stat}, {sz_display})</i>")
+        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b> <i>({stat}, {sz_display})</i>")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
     msg.append("</blockquote>")
 
-    new_items = []
-    try:
-        new_items = extract_new_game_items(version, new_text)
-    except Exception: pass
-
     if new_items:
         msg.append("│")
-        msg.append("├ ✨ NEW GAME ITEMS:")
+        msg.append("├ ✨ HIGH-VALUE INTRODUCED ITEMS:")
         msg.append("<blockquote>")
-        for idx, item in enumerate(new_items[:12], 1):
+        for idx, item in enumerate(new_items[:8], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            # Emphasize linked name and italicized mono ID layout (removed brackets)
-            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
-            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
-        if len(new_items) > 12:
-            msg.append(f"... and {len(new_items) - 12} more items.")
+            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a> <code>ID: {item['id']}</code>")
+        if len(new_items) > 8:
+            msg.append(f"... and {len(new_items) - 8} more catalog items.")
         msg.append("</blockquote>")
 
     msg.append("╰──────────────────────")
     
-    # Store dynamic mapping in local memory store to prevent database repinning spam
     file_keyboard_mappings = {}
     for file_id, stat, sz in file_entries[:5]:
         mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
@@ -1062,7 +1186,6 @@ def delete_message(chat_id, message_id):
 @app.route('/webhook', methods=['GET', 'POST'])
 def telegram_webhook():
     if request.method == 'GET':
-        # Dynamic GET diagnostic and webhook registration on Vercel
         try:
             host = request.headers.get('Host')
             protocol = "https" if "localhost" not in host else "http"
@@ -1072,10 +1195,10 @@ def telegram_webhook():
             setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
             
             diagnostic_text = (
-                "<b>🔔 MINIUPDATE BOT ONLINE</b>\n\n"
-                "🟢 Webhook successfully compiled and is active!\n"
-                f"🔗 Webhook Registered: <code>{current_url}</code>\n"
-                f"📦 Telegram Response: <code>{json.dumps(setup_res)}</code>"
+                "<b>🔔 MINIUPDATE BOT WEBHOOK SYSTEM ACTIVE</b>\n\n"
+                f"🟢 Webhook successfully registered and monitored.\n"
+                f"🔗 Webhook Target Endpoint: <code>{current_url}</code>\n"
+                f"📦 Telegram Pipeline Response: <code>{json.dumps(setup_res)}</code>"
             )
             send_message(OWNER_ID, diagnostic_text, parse_mode="HTML")
             
@@ -1215,7 +1338,7 @@ def handle_bot_webhook():
                 http_session.post(url, json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
-                    "text": f"⏳ Checking miniupdate version <b>{ver}</b>...",
+                    "text": f"⏳ Fetching intelligence bulletin for version: <b>{ver}</b>...",
                     "parse_mode": "HTML"
                 }, timeout=10)
                 
@@ -1223,8 +1346,18 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
-                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
+                        # Embed visual mapping callbacks inside the bulletin inline keyboard
+                        quick_buttons = []
+                        for fid, stat, sz in file_entries[:4]:
+                            mapping_id = file_keyboard_mappings.get(fid)
+                            if mapping_id:
+                                short_name = fid.split('/')[-1]
+                                if len(short_name) > 18:
+                                    short_name = short_name[:15] + "..."
+                                quick_buttons.append({"text": f"🔍 {short_name}", "callback_data": f"ext_bnd_{mapping_id}"})
+                        for i in range(0, len(quick_buttons), 2):
+                            keyboard.append(quick_buttons[i:i+2])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
@@ -1239,7 +1372,7 @@ def handle_bot_webhook():
                     http_session.post(url, json={
                         "chat_id": chat_id,
                         "message_id": msg_id,
-                        "text": f"❌ Version <b>{ver}</b> not found.",
+                        "text": f"❌ Target parameters log missing for version: <b>{ver}</b>",
                         "parse_mode": "HTML"
                     }, timeout=10)
 
@@ -1270,7 +1403,7 @@ def handle_bot_webhook():
                     http_session.post(url, json={
                         "chat_id": chat_id,
                         "message_id": msg_id,
-                        "text": f"⏳ Extracting bundle: <b>{file_name}</b>...",
+                        "text": f"⏳ Decompressing and mining structural indices: <b>{file_name}</b>...",
                         "parse_mode": "HTML"
                     }, timeout=10)
                     
@@ -1285,7 +1418,7 @@ def handle_bot_webhook():
                                 {"text": "📦 Download All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
                                 {"text": "🔍 Download Specific File", "callback_data": f"ext_spec_{mapping_id}"}
                             ],
-                            [{"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}]
+                            [{"text": "⬅️ Back to Report Details", "callback_data": f"back_ver_{ver}"}]
                         ]
                         
                         url = f"{TELEGRAM_API}/editMessageText"
@@ -1377,7 +1510,6 @@ def handle_bot_webhook():
                         sf = sub_files[idx]
                         fname = sf.get("name") or sf.get("fileName")
                         
-                        # Edit current inline menu to show "Extracting" status
                         url = f"{TELEGRAM_API}/editMessageText"
                         http_session.post(url, json={
                             "chat_id": chat_id,
@@ -1389,10 +1521,8 @@ def handle_bot_webhook():
                         b64 = sf.get("data", "")
                         if b64:
                             file_bytes = base64.b64decode(b64)
-                            # Deliver extracted raw document to Telegram
                             send_extracted_document_to_chat(chat_id, file_bytes, fname)
                             
-                            # Auto-clean active markup buttons (as requested)
                             keyboard = [[{"text": "⬅️ Back to Files List", "callback_data": f"ext_spec_{mapping_id}"}]]
                             url = f"{TELEGRAM_API}/editMessageText"
                             http_session.post(url, json={
@@ -1460,15 +1590,15 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
+            # Live fileinfo URL hook matching
             if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
                 version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
                 if version_match:
                     ver = version_match.group(1)
-                    keyboard = [[{"text": f"🔍 Check Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
+                    keyboard = [[{"text": f"🔍 Inspect Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
                     send_message_with_keyboard(chat_id, (
                         "╭──────────────────────\n"
-                        "├ New MINIUPDATE\n"
+                        "├ New MINIUPDATE DETECTED\n"
                         f"├ Version: <b>{ver}</b>\n"
                         "╰──────────────────────"
                     ), {"inline_keyboard": keyboard}, parse_mode="HTML")
@@ -1484,10 +1614,10 @@ def handle_bot_webhook():
             if raw_text.startswith("/start"):
                 send_message(chat_id, (
                     "╭─⚡ MINIUPDATE CHECKER BOT ────\n│\n"
-                    "├ Welcome! You are an approved user. 🎉\n│\n"
-                    "├ ⚙️ COMMANDS:\n"
+                    "├ Welcome! Core parsing channels are fully online. 🎉\n│\n"
+                    "├ ⚙️ SYSTEM COMMANDS:\n"
                     "├ ▫️ /check [version]\n"
-                    "├ ▫️ /extract [replying to any asset file]\n"
+                    "├ ▫️ /extract [reply to any asset file document]\n"
                     "╰──────────────────────"
                 ))
 
@@ -1498,8 +1628,7 @@ def handle_bot_webhook():
                     return jsonify({"status": "ok"}), 200
                 ver = parts[1].strip()
                 
-                # Send live in-progress state first to feel active and responsive
-                sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
+                sent_msg = send_message(chat_id, f"⏳ Generating intelligence report for version: <b>{ver}</b>...", parse_mode="HTML")
                 if not sent_msg or not sent_msg.get("ok"):
                     return jsonify({"status": "ok"}), 200
                 
@@ -1509,8 +1638,17 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
-                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
+                        quick_buttons = []
+                        for fid, stat, sz in file_entries[:4]:
+                            mapping_id = file_keyboard_mappings.get(fid)
+                            if mapping_id:
+                                short_name = fid.split('/')[-1]
+                                if len(short_name) > 18:
+                                    short_name = short_name[:15] + "..."
+                                quick_buttons.append({"text": f"🔍 {short_name}", "callback_data": f"ext_bnd_{mapping_id}"})
+                        for i in range(0, len(quick_buttons), 2):
+                            keyboard.append(quick_buttons[i:i+2])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
                     payload = {
@@ -1528,7 +1666,7 @@ def handle_bot_webhook():
                     http_session.post(url, json={
                         "chat_id": chat_id,
                         "message_id": sent_msg_id,
-                        "text": f"❌ Version <b>{ver}</b> not found.",
+                        "text": f"❌ Target parameters log missing for version: <b>{ver}</b>",
                         "parse_mode": "HTML"
                     }, timeout=10)
 
@@ -1553,8 +1691,6 @@ def handle_bot_webhook():
                                     sub_files = parse_bundle_subfiles(None, is_local_upload=True, upload_bytes=res.content, filename=file_name)
                                     if sub_files:
                                         mapping_id = str(uuid.uuid4())[:8]
-                                        
-                                        # Save dynamic mapping in local memory store to prevent database repinning spam
                                         BOT_TEMP_MAPPINGS[mapping_id] = {
                                             "url": dl_url,
                                             "filename": file_name
