@@ -126,7 +126,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 <div class="brand-strip">
     <img src="https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png" class="h-7 object-contain" alt="Logo">
 </div>
-.brand-line { width: 100%; height: 3px; background: var(--ff-yellow); }
+<div class="brand-line"></div>
 
 <div class="flex flex-col items-center pt-6 pb-4 px-4 select-none">
     <div class="text-center tracking-tight">
@@ -297,6 +297,7 @@ let activeBuildIsNewPatch = false;
 let offlineDataPayloadSessionCache = {};
 let currentPreviewRequestId = 0;
 let currentTraySubAssets = []; // Cache list of active expanded sub-assets inside current expanded bundle
+let trayDataCache = {}; // Global dictionary mapping accordion index to downloaded extracted data
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
@@ -412,6 +413,7 @@ function resetOutputWorkspace() {
     offlineDataPayloadSessionCache = {};
     currentPreviewRequestId++;
     currentTraySubAssets = [];
+    trayDataCache = {};
 
     fileList.innerHTML = "";
     itemList.innerHTML = "";
@@ -553,7 +555,7 @@ function renderList() {
         const row = document.createElement('div');
         row.className = "flex flex-col rounded-xl bg-[#0b0b0f] border border-zinc-900 overflow-hidden min-w-0 mb-1";
 
-        let badgeColor = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+        let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
         if (item.status === "Modified") {
             badgeColor = "bg-amber-500/10 text-amber-400 border border-emerald-500/20";
         }
@@ -661,9 +663,27 @@ function renderItemList() {
     });
 }
 
-function toggleSubFolder(folderId, headerEl) {
+function toggleSubFolder(folderId, buttonEl, trayIndex) {
     const folder = document.getElementById(folderId);
-    const arrow = headerEl.querySelector('.fa-chevron-down');
+    const arrow = buttonEl.querySelector('.fa-chevron-down');
+    
+    // Collapse all other expanded subfolders in this specific active tray index first
+    const activeTray = document.getElementById(`tray-${trayIndex}`);
+    if (activeTray) {
+        activeTray.querySelectorAll('[id^="folder-"]').forEach(otherFolder => {
+            if (otherFolder.id !== folderId) {
+                otherFolder.classList.add('hidden');
+                const otherHeader = otherFolder.previousElementSibling;
+                if (otherHeader) {
+                    const otherArrow = otherHeader.querySelector('.fa-chevron-down');
+                    if (otherArrow) {
+                        otherArrow.style.transform = 'rotate(0deg)';
+                    }
+                }
+            }
+        });
+    }
+
     if (folder.classList.contains('hidden')) {
         folder.classList.remove('hidden');
         arrow.style.transform = 'rotate(180deg)';
@@ -711,6 +731,116 @@ function selectCompositeAsset(compString, element) {
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function previewCategoryFolder(index, key) {
+    cleanPreviousMediaTracks();
+    currentPreviewRequestId++;
+    const requestId = currentPreviewRequestId;
+
+    document.getElementById('previewFallback').classList.add('hidden');
+    document.getElementById('previewContent').classList.remove('hidden');
+
+    const mediaBox = document.getElementById('mediaBox');
+    document.getElementById('mediaTypeLabel').innerText = key.toUpperCase().replace('_', ' ');
+    document.getElementById('meshRelationBox').classList.add('hidden');
+
+    const extractedData = trayDataCache[index];
+    if (!extractedData) return;
+
+    const categoryAssets = extractedData.categories[key] || [];
+    if (categoryAssets.length === 0) {
+        showFallbackError("No assets in this category folder to preview.");
+        return;
+    }
+
+    if (key === 'textures') {
+        document.getElementById('mediaTitle').innerText = "Visual Sprite Board";
+        let boardHtml = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204] overflow-hidden flex flex-col p-3 text-left">
+                    <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex-shrink-0">
+                        Textures & Sprite Assets Grid Map
+                    </div>
+                    <div class="flex-1 overflow-y-auto custom-scrollbar grid grid-cols-2 sm:grid-cols-3 gap-3 pr-1">
+        `;
+        categoryAssets.forEach(tex => {
+            const displayName = tex.name || tex.fileName || "unnamed_asset";
+            boardHtml += `
+                <div class="flex flex-col bg-black/40 border border-zinc-900 rounded-lg p-2 items-center justify-center cursor-pointer hover:border-yellow-500/40" onclick="triggerDirectSiblingPreview('${encodeURIComponent(tex.url)}', '${encodeURIComponent(displayName)}', 'TEXTURE')">
+                    <img src="${tex.url}" class="w-full h-16 object-contain rounded pixelated-render mb-1 bg-[#09090d]">
+                    <span class="text-[8px] font-mono font-bold text-zinc-400 truncate w-full text-center" title="${displayName}">${displayName.split('/').pop()}</span>
+                </div>
+            `;
+        });
+        boardHtml += `
+                    </div>
+                </div>
+            </div>
+        `;
+        mediaBox.innerHTML = boardHtml;
+    }
+    else if (key === '3d_models') {
+        document.getElementById('mediaTitle').innerText = "Assembled Geometry Workspace";
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh">
+                    <canvas id="babylonCategoryCanvas" class="babylon-canvas-viewport"></canvas>
+                </div>
+            </div>`;
+        
+        const firstMesh = categoryAssets[0];
+        const siblingParts = categoryAssets.slice(1).map(m => ({
+            name: (m.name || m.fileName).split('/').pop(),
+            url: m.url,
+            associated_textures: m.associated_textures || []
+        }));
+        initBabylonMeshScene("babylonCategoryCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
+    }
+    else if (key === 'configs') {
+        document.getElementById('mediaTitle').innerText = "Configurations Registry Matrix";
+        let configHtml = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204] overflow-hidden flex flex-col p-3 text-left">
+                    <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex-shrink-0">
+                        Gameplay Configurations & Parameter Summaries
+                    </div>
+                    <div class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+        `;
+        
+        categoryAssets.forEach((conf) => {
+            const displayName = conf.name || conf.fileName || "unnamed_config";
+            configHtml += `
+                <div class="p-2 bg-black/40 border border-zinc-900 rounded-lg cursor-pointer hover:border-yellow-500/40" onclick="triggerDirectSiblingPreview('${encodeURIComponent(conf.url)}', '${encodeURIComponent(displayName)}', 'CONFIGURATION')">
+                    <div class="flex items-center justify-between border-b border-zinc-950 pb-1 mb-1">
+                        <span class="text-[9px] font-bold text-zinc-300 font-mono truncate"><i class="fa-solid fa-file-invoice mr-1.5 opacity-60"></i>${displayName.split('/').pop()}</span>
+                        <span class="text-[8px] font-black text-zinc-600 uppercase tracking-widest">Configuration</span>
+                    </div>
+                    <p class="text-[8px] text-zinc-500 truncate">Select this element to load full parameters and reference connections.</p>
+                </div>
+            `;
+        });
+        
+        configHtml += `
+                    </div>
+                </div>
+            </div>
+        `;
+        mediaBox.innerHTML = configHtml;
+    }
+    else {
+        // Direct trigger on single items
+        const firstAsset = categoryAssets[0];
+        const displayName = firstAsset.name || firstAsset.fileName || "unnamed_asset";
+        const rawType = firstAsset.type || firstAsset.label || "Unknown";
+        selectFile({
+            id: firstAsset.url,
+            name: displayName,
+            label: rawType,
+            associatedTextures: firstAsset.associated_textures || [],
+            compositeParts: firstAsset.composite_parts || []
+        }, null);
+    }
+}
+
 async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     const tray = document.getElementById(`tray-${index}`);
     const arrow = document.getElementById(`arrow-${index}`);
@@ -752,6 +882,9 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             return;
         }
 
+        // Cache tray payload globally for category previews
+        trayDataCache[index] = extractedData;
+
         let sublistHtml = "";
         
         // 1. Render Composite Assemblies if present
@@ -763,7 +896,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             `;
             extractedData.composites.forEach(comp => {
                 sublistHtml += `
-                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
+                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left select-none" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
                         <div class="flex items-center justify-between">
                             <span class="text-[10px] font-bold text-yellow-500 truncate"><i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>${comp.name}</span>
                             <span class="text-[8px] px-1.5 py-0.2 rounded border border-yellow-500/20 bg-yellow-500/5 text-yellow-400 uppercase tracking-wider font-mono">Assembly Ready</span>
@@ -805,11 +938,16 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             
             sublistHtml += `
                 <div class="flex flex-col bg-black/30 rounded-xl border border-zinc-900/60 overflow-hidden">
-                    <div class="flex items-center justify-between p-2.5 cursor-pointer hover:bg-zinc-950 transition-all text-left select-none" onclick="toggleSubFolder('folder-${index}-${f.key}', this)">
-                        <span class="text-[10px] font-bold text-zinc-400 flex items-center gap-2">
-                            <i class="fa-solid ${f.icon} opacity-60"></i> ${f.label} (${list.length})
-                        </span>
-                        <i class="fa-solid fa-chevron-down text-[8px] text-zinc-600 transition-transform"></i>
+                    <div class="flex items-center justify-between p-2.5 hover:bg-zinc-950 transition-all text-left select-none">
+                        <!-- Folder Preview Trigger: Click title to load category-wide visual workspace -->
+                        <div class="flex-1 cursor-pointer flex items-center gap-2" onclick="previewCategoryFolder('${index}', '${f.key}')">
+                            <i class="fa-solid ${f.icon} opacity-60 text-yellow-500"></i>
+                            <span class="text-[10px] font-bold text-zinc-300">${f.label} (${list.length})</span>
+                        </div>
+                        <!-- Folder Expand Trigger: Click chevron to expand sub-asset listings -->
+                        <button class="w-6 h-6 flex items-center justify-center text-zinc-600 hover:text-white" onclick="toggleSubFolder('folder-${index}-${f.key}', this, '${index}')">
+                            <i class="fa-solid fa-chevron-down text-[8px] transition-transform"></i>
+                        </button>
                     </div>
                     <div id="folder-${index}-${f.key}" class="hidden bg-black/40 border-t border-zinc-950 p-2 space-y-1">
             `;
@@ -1006,6 +1144,24 @@ function renderStructuredJSON(jsonObj, ext, label, item) {
         </div>`;
 }
 
+window.triggerDirectSiblingPreview = function(encodedUrl, encodedName, encodedLabel, encodedTextures, encodedParts) {
+    const url = decodeURIComponent(encodedUrl);
+    const name = decodeURIComponent(encodedName);
+    const label = decodeURIComponent(encodedLabel);
+    const textures = JSON.parse(decodeURIComponent(encodedTextures));
+    const parts = JSON.parse(decodeURIComponent(encodedParts));
+
+    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
+
+    selectFile({
+        id: url,
+        name: name,
+        label: label,
+        associatedTextures: textures,
+        compositeParts: parts
+    }, null);
+};
+
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
@@ -1160,6 +1316,12 @@ async function selectFile(item, element) {
                 }
 
                 if (requestId !== currentPreviewRequestId) return;
+
+                // Stop loop routing fallback HTML documents from loading
+                const sanitizedCheck = processedTextString.trim().toLowerCase();
+                if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
+                    throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset file data.");
+                }
 
                 try {
                     parsedJson = json_parse_clean(processedTextString);
