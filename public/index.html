@@ -45,7 +45,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .scrollable-content-box { flex: 1; background: #040406; border: 1px solid #13131a; border-radius: 14px; overflow: hidden; position: relative; }
 
 .tab-row { display: flex; background: #0f0f14; padding: 4px; border-radius: 10px; border: 1px solid #1b1b24; gap: 4px; width: 100%; }
-.tab-btn { flex: 1; text-align: center; padding: 10px 4px; font-size: 11px; font-weight: 700; color: #8e8e93; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.tab-btn { flex: 1; text-align: center; padding: 10px 4px; font-size: 12px; font-weight: 700; color: #8e8e93; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .tab-btn:hover { color: #fff; background: #14141c; }
 .tab-btn.active { background: #1a1a26; color: var(--ff-yellow); box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); }
 
@@ -190,6 +190,13 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
             </div>
 
+            <!-- Intelligence Briefing Box -->
+            <div id="insightReportContainer" class="hidden bg-[#09090d] border border-zinc-900 rounded-xl p-3 mb-3 text-left">
+                <span class="block text-[8px] font-black text-yellow-500 uppercase tracking-widest leading-none mb-1.5"><i class="fa-solid fa-circle-info mr-1"></i>Update Briefing</span>
+                <p id="insightSummaryText" class="text-[10px] font-medium text-zinc-300 leading-normal mb-2"></p>
+                <div id="insightCategories" class="flex flex-wrap gap-1"></div>
+            </div>
+
             <!-- Sleek SVG Stat Bar -->
             <div id="webStatBar" class="hidden grid grid-cols-3 gap-2 p-2 bg-[#09090d]/60 border border-zinc-900 rounded-xl mb-3 text-left">
                 <div class="flex items-center gap-2 p-1.5 bg-black/40 rounded-lg border border-zinc-950/40">
@@ -222,9 +229,8 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
             </div>
 
             <div class="tab-row mb-3 hidden" id="packageTabs">
-                <div class="tab-btn active" data-tab="summary"><i class="fa-solid fa-brain text-[10px]"></i>Intelligence</div>
-                <div class="tab-btn" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)</div>
-                <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>Items (<span id="itemsCountTab">0</span>)</div>
+                <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)</div>
+                <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)</div>
             </div>
 
             <div class="scrollable-content-box flex-1 flex flex-col">
@@ -239,7 +245,6 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
                 <div id="fileList" class="hidden flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-w-0"></div>
                 <div id="itemList" class="hidden flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar min-w-0"></div>
-                <div id="summaryList" class="hidden flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar min-w-0 text-left"></div>
             </div>
         </div>
     </div>
@@ -257,6 +262,13 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
                 <div id="previewContent" class="hidden flex-1 flex flex-col min-w-0 overflow-hidden justify-between h-full">
                     <div id="mediaBox" class="w-full flex flex-col min-h-0 flex-1 justify-center h-full relative"></div>
+                    
+                    <!-- Dynamic Mesh Mapping Descriptor Card -->
+                    <div id="meshRelationBox" class="hidden mb-2 mt-1 bg-[#0b0b10] border border-zinc-900 rounded-xl p-2.5 text-left flex flex-col gap-1">
+                        <span class="text-[7px] font-black text-yellow-500 uppercase tracking-widest">Composite Map Detected</span>
+                        <p id="meshRelationDesc" class="text-[9px] font-medium text-zinc-400 leading-normal"></p>
+                    </div>
+
                     <div class="mt-3 bg-[#0d0d14] p-2 rounded-xl border border-zinc-900 flex items-center justify-between gap-3 flex-shrink-0 min-w-0">
                         <div class="min-w-0 flex-1 text-left px-1">
                             <p id="mediaTitle" class="text-[11px] font-bold text-zinc-300 truncate">Asset File</p>
@@ -278,13 +290,12 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 let activeCache = [];
 let activeNewItems = [];
 let activeMode = "auto";
-let activePackageTab = "summary";
+let activePackageTab = "files";
 let preCalculatedAutoVersion = "";
 let activeBuildIsNewPatch = false; 
 
 let offlineDataPayloadSessionCache = {};
-let currentPreviewRequestId = 0; // Guard against race conditions on fast selection clicks
-let currentAccordionAssets = []; // Stores assets for currently expanded accordion bundle
+let currentPreviewRequestId = 0;
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
@@ -302,7 +313,6 @@ const btnIcon = document.getElementById("btnIcon");
 const btnText = document.getElementById("btnText");
 const fileList = document.getElementById("fileList");
 const itemList = document.getElementById("itemList");
-const summaryList = document.getElementById("summaryList");
 const listWindowPanel = document.getElementById("listWindowPanel");
 
 pipelineTabs.addEventListener("click", (e) => {
@@ -328,16 +338,12 @@ packageTabs.addEventListener("click", (e) => {
     target.classList.add("active");
     activePackageTab = target.dataset.tab;
 
-    fileList.classList.add("hidden");
-    itemList.classList.add("hidden");
-    summaryList.classList.add("hidden");
-
     if(activePackageTab === "files") {
         fileList.classList.remove("hidden");
-    } else if(activePackageTab === "items") {
-        itemList.classList.remove("hidden");
+        itemList.classList.add("hidden");
     } else {
-        summaryList.classList.remove("hidden");
+        fileList.classList.add("hidden");
+        itemList.classList.remove("hidden");
     }
 });
 
@@ -402,13 +408,11 @@ function copyItemInfo(id, name) {
 function resetOutputWorkspace() {
     activeCache = [];
     activeNewItems = [];
-    currentAccordionAssets = [];
     offlineDataPayloadSessionCache = {};
-    currentPreviewRequestId++; // Revokes all outstanding asynchronous preview loads immediately
+    currentPreviewRequestId++;
 
     fileList.innerHTML = "";
     itemList.innerHTML = "";
-    summaryList.innerHTML = "";
     document.getElementById('filesCountTab').innerText = "0";
     document.getElementById('itemsCountTab').innerText = "0";
     document.getElementById('cacheCounterText').innerText = "0 elements identified";
@@ -416,6 +420,8 @@ function resetOutputWorkspace() {
     document.getElementById('listActions').classList.add('hidden');
     document.getElementById("packageTabs").classList.add("hidden");
     document.getElementById('webStatBar').classList.add('hidden');
+    document.getElementById('insightReportContainer').classList.add('hidden');
+    document.getElementById('meshRelationBox').classList.add('hidden');
 
     cleanPreviousMediaTracks();
 
@@ -433,7 +439,6 @@ extractBtn.onclick = async () => {
         return;
     }
 
-    // Instantly reset output workspace visual elements before loading
     resetOutputWorkspace();
 
     extractBtn.disabled = true;
@@ -449,7 +454,6 @@ extractBtn.onclick = async () => {
     document.getElementById('listLoadingState').classList.remove('hidden');
     fileList.classList.add('hidden');
     itemList.classList.add('hidden');
-    summaryList.classList.add('hidden');
 
     try {
         const res = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
@@ -458,26 +462,54 @@ extractBtn.onclick = async () => {
 
         activeCache = data.files || [];
         activeNewItems = data.new_items || [];
-        const intelligence = data.intelligence;
 
         document.getElementById('listLoadingState').classList.add('hidden');
         
         renderList(); 
         renderItemList();
-        renderSummaryList(intelligence);
 
         document.getElementById('listActions').classList.remove('hidden');
-        document.getElementById("packageTabs").classList.remove("hidden");
         
-        // Auto-focus the Intelligence tab by default on successful query
-        document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => {
-            if (btn.dataset.tab === "summary") btn.classList.add("active");
-            else btn.classList.remove("active");
-        });
-        activePackageTab = "summary";
-        summaryList.classList.remove('hidden');
+        if (activeNewItems.length === 0) {
+            document.getElementById("packageTabs").classList.add("hidden");
+            document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => {
+                if (btn.dataset.tab === "files") btn.classList.add("active");
+                else btn.classList.remove("active");
+            });
+            activePackageTab = "files";
+            fileList.classList.remove('hidden');
+            itemList.classList.add('hidden');
+        } else {
+            document.getElementById("packageTabs").classList.remove("hidden");
+            if (activePackageTab === "files") {
+                fileList.classList.remove('hidden');
+            } else {
+                itemList.classList.remove('hidden');
+            }
+        }
 
-        // Render Web UI Stats Bar above lists
+        // Render Insight Report if present
+        if (data.analysis) {
+            document.getElementById('insightSummaryText').innerText = data.analysis.summary || "";
+            const catContainer = document.getElementById('insightCategories');
+            catContainer.innerHTML = "";
+            if (data.analysis.categories) {
+                data.analysis.categories.forEach(cat => {
+                    const badge = document.createElement('span');
+                    badge.className = "text-[7px] font-black px-1.5 py-0.5 rounded border border-yellow-500/10 bg-yellow-500/5 text-yellow-500 uppercase tracking-wider";
+                    badge.innerText = cat;
+                    catContainer.appendChild(badge);
+                });
+            }
+            if (data.analysis.severity) {
+                const sevBadge = document.createElement('span');
+                sevBadge.className = "text-[7px] font-black px-1.5 py-0.5 rounded border border-cyan-500/15 bg-cyan-500/5 text-cyan-400 uppercase tracking-wider";
+                sevBadge.innerText = data.analysis.severity;
+                catContainer.appendChild(sevBadge);
+            }
+            document.getElementById('insightReportContainer').classList.remove('hidden');
+        }
+
         const newCount = data.files.filter(f => f.status === "New").length;
         const modCount = data.files.filter(f => f.status === "Modified").length;
         
@@ -554,80 +586,6 @@ function renderList() {
     });
 }
 
-function findMatchingBundle(itemName, itemId) {
-    if (!itemName) return null;
-    const nameLower = itemName.toLowerCase();
-    const terms = nameLower
-        .replace(/bundle|skin|set|outfit|pack|emote/g, "")
-        .replace(/[^a-z0-9\s]/g, "")
-        .split(/\s+/)
-        .filter(term => term.length >= 3);
-        
-    if (terms.length === 0) return null;
-    
-    for (let f of activeCache) {
-        const fName = f.fileName.toLowerCase();
-        const matchCount = terms.filter(t => fName.includes(t)).length;
-        if (matchCount >= Math.min(2, terms.length)) {
-            return f.fileName;
-        }
-    }
-    return null;
-}
-
-async function focusAndExtractBundle(encodedBundleUrl) {
-    const targetUrl = decodeURIComponent(encodedBundleUrl);
-    
-    document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => {
-        if (btn.dataset.tab === "files") btn.classList.add("active");
-        else btn.classList.remove("active");
-    });
-    activePackageTab = "files";
-    fileList.classList.remove("hidden");
-    itemList.classList.add("hidden");
-    summaryList.classList.add("hidden");
-    
-    const targetIndex = activeCache.findIndex(f => f.fileName === targetUrl);
-    if (targetIndex === -1) {
-        showToast("Linked asset bundle not found in active update files.", false);
-        return;
-    }
-    
-    const rows = fileList.children;
-    if (rows && rows[targetIndex]) {
-        rows[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
-        
-        const tray = document.getElementById(`tray-${targetIndex}`);
-        if (tray && tray.style.display !== "block") {
-            const rowHeader = rows[targetIndex].firstElementChild;
-            if (rowHeader) {
-                const item = activeCache[targetIndex];
-                await toggleAccordionTray(targetIndex, encodeURIComponent(item.url), encodeURIComponent(item.fileName));
-            }
-        }
-        
-        setTimeout(() => {
-            const sublist = document.getElementById(`sublist-${targetIndex}`);
-            if (sublist) {
-                const subRows = Array.from(sublist.querySelectorAll(".sub-asset-row"));
-                let targetRow = subRows.find(r => r.innerText.toLowerCase().includes('.obj') || r.innerText.toLowerCase().includes('mesh'));
-                if (!targetRow) {
-                    targetRow = subRows.find(r => r.innerText.toLowerCase().includes('.png') || r.innerText.toLowerCase().includes('.jpg') || r.innerText.toLowerCase().includes('texture'));
-                }
-                if (!targetRow && subRows.length > 0) {
-                    targetRow = subRows[0];
-                }
-                
-                if (targetRow) {
-                    targetRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                    targetRow.click();
-                    showToast("Linked asset extracted and loaded in Live Viewport!");
-                }
-            }
-        }, 1200);
-    }
-}
-
 function renderItemList() {
     itemList.innerHTML = "";
     document.getElementById('itemsCountTab').innerText = activeNewItems.length;
@@ -674,31 +632,6 @@ function renderItemList() {
         }
 
         const cleanNameEscaped = item.name.replace(/'/g, "\\'");
-        const matchingBundle = findMatchingBundle(item.name, item.id);
-        let linkHtml = "";
-        if (matchingBundle) {
-            const cleanBundleName = matchingBundle.split('/').pop();
-            linkHtml = `
-                <button onclick="focusAndExtractBundle('${encodeURIComponent(matchingBundle)}')" class="text-[9px] px-2.5 py-1.5 bg-yellow-500/15 hover:bg-yellow-500 text-yellow-500 hover:text-black rounded border border-yellow-500/25 font-black transition-all flex items-center gap-1.5 mt-2 w-max leading-none">
-                    <i class="fa-solid fa-cube text-[10px]"></i> Extract & Inspect Linked 3D Asset (${cleanBundleName})
-                </button>
-            `;
-        } else {
-            linkHtml = `
-                <div class="text-[8px] text-zinc-600 font-black uppercase mt-2 tracking-wider flex items-center gap-1.5 select-none text-left">
-                    <i class="fa-solid fa-circle-info"></i> Extraction mapping offline
-                </div>
-            `;
-        }
-
-        let typeBadge = `<span class="text-[8px] font-black px-1.5 py-0.2 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded uppercase leading-none">Catalog Item</span>`;
-        if (item.name.toLowerCase().includes("emote") || item.name.toLowerCase().includes("pose") || item.name.toLowerCase().includes("dance")) {
-            typeBadge = `<span class="text-[8px] font-black px-1.5 py-0.2 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded uppercase leading-none">Emote</span>`;
-        } else if (item.name.toLowerCase().includes("bundle") || item.name.toLowerCase().includes("set") || item.name.toLowerCase().includes("costume")) {
-            typeBadge = `<span class="text-[8px] font-black px-1.5 py-0.2 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded uppercase leading-none">Outfit Set</span>`;
-        } else if (item.name.toLowerCase().includes("skin") || item.name.toLowerCase().includes("weapon") || item.name.toLowerCase().includes("scythe")) {
-            typeBadge = `<span class="text-[8px] font-black px-1.5 py-0.2 bg-red-500/10 border border-red-500/20 text-red-400 rounded uppercase leading-none">Weapon Skin</span>`;
-        }
 
         row.innerHTML = `
             <div class="flex items-center justify-between min-w-0 gap-2">
@@ -707,12 +640,8 @@ function renderItemList() {
                         <img src="${item.icon_url}" class="w-full h-full object-contain" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
                     </div>
                     <div class="min-w-0 flex-1 text-left">
-                        <div class="flex items-center gap-2 flex-wrap mb-0.5">
-                            <p class="text-xs font-bold text-white leading-tight">${item.name}</p>
-                            ${typeBadge}
-                        </div>
-                        <p class="text-[9px] text-zinc-500 font-mono">ID: ${item.id}</p>
-                        ${linkHtml}
+                        <p class="text-xs font-bold text-white leading-tight">${item.name}</p>
+                        <p class="text-[9px] text-zinc-500 font-mono mt-0.5">ID: ${item.id}</p>
                     </div>
                 </div>
                 <div class="flex gap-1.5 flex-shrink-0">
@@ -728,91 +657,6 @@ function renderItemList() {
         `;
         itemList.appendChild(row);
     });
-}
-
-function renderSummaryList(intelligence) {
-    summaryList.innerHTML = "";
-    if (!intelligence) {
-        summaryList.innerHTML = `<div class="text-zinc-600 text-xs text-center py-8">Update intelligence overview parameters empty.</div>`;
-        return;
-    }
-
-    const reportCard = document.createElement("div");
-    reportCard.className = "p-4 bg-zinc-950/40 border border-zinc-900 rounded-xl space-y-2";
-    reportCard.innerHTML = `
-        <span class="text-[8px] font-black text-yellow-500 uppercase tracking-widest block">Executive Intelligence Summary</span>
-        <p class="text-[11px] text-zinc-300 leading-relaxed">${intelligence.summary_paragraph}</p>
-    `;
-    summaryList.appendChild(reportCard);
-
-    const focusCard = document.createElement("div");
-    focusCard.className = "space-y-2";
-    focusCard.innerHTML = `<span class="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Inferred MiniUpdate Objective</span>`;
-    
-    intelligence.purposes.forEach(p => {
-        const div = document.createElement("div");
-        div.className = "p-3 bg-[#0b0b0f] border border-zinc-900 rounded-xl flex items-start gap-3";
-        div.innerHTML = `
-            <div class="text-xs text-emerald-400 mt-0.5 flex-shrink-0"><i class="fa-solid fa-circle-check"></i></div>
-            <p class="text-[11px] text-zinc-200 font-bold leading-relaxed">${p}</p>
-        `;
-        focusCard.appendChild(div);
-    });
-    summaryList.appendChild(focusCard);
-
-    if (intelligence.modified_explanations && intelligence.modified_explanations.length > 0) {
-        const modCard = document.createElement("div");
-        modCard.className = "space-y-2";
-        modCard.innerHTML = `<span class="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Patch Modifications Decoded</span>`;
-        
-        intelligence.modified_explanations.forEach(expl => {
-            const div = document.createElement("div");
-            div.className = "p-3 bg-[#0b0b0f] border border-zinc-900 rounded-xl flex items-start gap-3";
-            div.innerHTML = `
-                <div class="text-xs text-yellow-500 mt-0.5 flex-shrink-0"><i class="fa-solid fa-wrench"></i></div>
-                <p class="text-[11px] text-zinc-300 leading-normal">${expl}</p>
-            `;
-            modCard.appendChild(div);
-        });
-        summaryList.appendChild(modCard);
-    }
-
-    const cats = intelligence.categories;
-    if (cats) {
-        const distributeCard = document.createElement("div");
-        distributeCard.className = "space-y-2";
-        distributeCard.innerHTML = `<span class="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Category Distribution Metrics</span>`;
-        
-        const grid = document.createElement("div");
-        grid.className = "grid grid-cols-2 gap-2";
-        
-        const items = [
-            { label: "Weapons", count: cats.weapons_count, icon: "fa-gun", color: "text-red-400" },
-            { label: "VFX Shaders", count: cats.vfx_count, icon: "fa-wand-magic-sparkles", color: "text-pink-400" },
-            { label: "Emotes & Moves", count: cats.emotes_count, icon: "fa-person-running", color: "text-purple-400" },
-            { label: "Outfits & Costumes", count: cats.bundles_count, icon: "fa-shirt", color: "text-amber-400" },
-            { label: "Catalog Configs", count: cats.config_count, icon: "fa-gear", color: "text-emerald-400" },
-            { label: "UI / Shop Designs", count: cats.ui_count, icon: "fa-palette", color: "text-cyan-400" },
-            { label: "Compiled Patches", count: cats.code_count, icon: "fa-terminal", color: "text-zinc-500" }
-        ];
-
-        items.forEach(i => {
-            if (i.count > 0) {
-                const badge = document.createElement("div");
-                badge.className = "p-2.5 bg-[#0b0b0f] border border-zinc-900 rounded-xl flex items-center justify-between";
-                badge.innerHTML = `
-                    <div class="flex items-center gap-2 min-w-0">
-                        <i class="fa-solid ${i.icon} ${i.color} text-xs flex-shrink-0"></i>
-                        <span class="text-[10px] text-zinc-400 font-bold truncate">${i.label}</span>
-                    </div>
-                    <span class="text-[10px] font-black text-white px-1.5 py-0.2 bg-black rounded border border-zinc-900">${i.count}</span>
-                `;
-                grid.appendChild(badge);
-            }
-        });
-        distributeCard.appendChild(grid);
-        summaryList.appendChild(distributeCard);
-    }
 }
 
 async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
@@ -843,21 +687,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     tray.style.display = "block";
     arrow.style.transform = "rotate(185deg)";
 
-    if (sublist.children.length > 0) {
-        // Expose cached accordion files list to preview operations
-        currentAccordionAssets = [];
-        Array.from(sublist.querySelectorAll('.sub-asset-row')).forEach(row => {
-            currentAccordionAssets.push({
-                name: row.dataset.name,
-                fileName: row.dataset.name,
-                url: row.dataset.url,
-                preview_url: row.dataset.url,
-                type: row.dataset.type,
-                label: row.dataset.type
-            });
-        });
-        return;
-    }
+    if (sublist.children.length > 0) return;
 
     try {
         const response = await fetch(`/api/process?bundle_url=${encodeURIComponent(url)}`);
@@ -870,20 +700,14 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             return;
         }
 
-        currentAccordionAssets = targets;
-
         targets.forEach((asset, subIdx) => {
             const subRow = document.createElement('div');
             subRow.className = "sub-asset-row hover:bg-zinc-950 rounded cursor-pointer text-left";
-            
+
             let displayName = asset.name || asset.fileName || "unnamed_asset";
             let rawType = asset.type || asset.label || "Unknown";
+
             const uniqueTrackingKey = asset.preview_url || asset.url || "";
-            
-            subRow.dataset.name = displayName;
-            subRow.dataset.type = rawType;
-            subRow.dataset.url = uniqueTrackingKey;
-            
             offlineDataPayloadSessionCache[uniqueTrackingKey] = uniqueTrackingKey;
 
             subRow.onclick = (e) => {
@@ -891,7 +715,9 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                 selectFile({ 
                     id: uniqueTrackingKey,
                     name: displayName, 
-                    label: rawType
+                    label: rawType,
+                    associatedTextures: asset.associated_textures || [],
+                    compositeParts: asset.composite_parts || []
                 }, subRow);
             };
 
@@ -1003,131 +829,138 @@ async function selectFile(item, element) {
     if (requestId !== currentPreviewRequestId) return;
 
     if (ext === 'obj' || lLabel.includes('mesh')) {
-        // Intelligently check sibling files in expanded accordion for corresponding texture image mapping
-        let siblingTextureUrl = null;
-        const textureAsset = currentAccordionAssets.find(asset => {
-            const aName = (asset.name || asset.fileName || "").toLowerCase();
-            const aType = (asset.type || asset.label || "").toLowerCase();
-            return aName.endsWith('.png') || aName.endsWith('.jpg') || aName.endsWith('.jpeg') || aType.includes('texture') || aType.includes('sprite');
-        });
-        if (textureAsset) {
-            siblingTextureUrl = offlineDataPayloadSessionCache[textureAsset.preview_url || textureAsset.url];
-        }
-
         mediaBox.innerHTML = `
-            <div class="custom-player-wrapper h-full relative">
+            <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
                     <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
-                    <div id="meshTextureOverlay" class="absolute top-3 left-3 bg-black/85 border border-zinc-900 text-[9px] px-2.5 py-1 rounded text-zinc-400 select-none z-30 flex items-center gap-1.5 leading-none">Generic Shader</div>
                 </div>
             </div>`;
-        initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name, siblingTextureUrl);
-    } 
-    else if (isImage) {
-        mediaBox.innerHTML = `
-            <div class="custom-player-wrapper h-full">
-                <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <img src="${liveSourceData}" class="pixelated-render">
-                </div>
-            </div>`;
-    } 
-    else if (isVideo) {
-        mediaBox.innerHTML = `
-            <div class="custom-player-wrapper relative">
-                <div class="aspect-16-9-viewport relative">
-                    <div id="videoCenterOverlay" class="center-play-overlay">
-                        <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
-                    </div>
-                    <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
-                </div>
-                <div class="custom-control-bar">
-                    <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                    <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                            <i class="fa-solid fa-play"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>`;
-        initCustomVideoController();
-    } 
-    else if (isAudio) {
-        mediaBox.innerHTML = `
-            <div class="custom-player-wrapper relative">
-                <div class="aspect-16-9-viewport relative">
-                    <div id="audioCenterOverlay" class="center-play-overlay">
-                        <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
-                    </div>
-                    <canvas id="audioVisualizerCanvas"></canvas>
-                    <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
-                </div>
-                <div class="custom-control-bar">
-                    <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                    <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                            <i class="fa-solid fa-play"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>`;
-        initCustomAudioController();
-    } 
-    else if (isBinary) {
-        mediaBox.innerHTML = `
-            <div class="custom-player-wrapper h-full">
-                <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
-                    <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
-                        <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
-                            <span>Hexadecimal representation (First 4KB)</span>
-                            <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
-                        </div>
-                        <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
-                    </div>
-                </div>
-            </div>`;
-        try {
-            const rawResponse = await fetch(liveSourceData);
-            if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
-            const arrayBuffer = await rawResponse.arrayBuffer();
-            if (requestId !== currentPreviewRequestId) return;
-            document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
-            const hexDump = getHexDump(arrayBuffer);
-            document.getElementById('hexDumpContainer').textContent = hexDump;
-        } catch (e) {
-            if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+        
+        // Populate mesh mappings inside the relation descriptor card
+        const relationBox = document.getElementById('meshRelationBox');
+        const descText = document.getElementById('meshRelationDesc');
+        
+        const countParts = (item.compositeParts ? item.compositeParts.length : 0);
+        const countTex = (item.associatedTextures ? item.associatedTextures.length : 0);
+        
+        if (countParts > 0 || countTex > 0) {
+            descText.innerText = `Assembling model utilizing ${countParts + 1} segmented mesh parts mapped concurrently with ${countTex} matched texture layer paths.`;
+            relationBox.classList.remove('hidden');
+        } else {
+            relationBox.classList.add('hidden');
         }
+
+        initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name, item.associatedTextures || [], item.compositeParts || []);
     } 
     else {
-        try {
-            let processedTextString = "";
-            if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
-                const parts = liveSourceData.split(',');
-                processedTextString = atob(parts[1]);
-            } else {
-                const rawTextResponse = await fetch(liveSourceData);
-                if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
-
-                const contentText = await rawTextResponse.text();
-                const sanitizedCheck = contentText.trim().toLowerCase();
-
-                if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head')) {
-                    throw new Error("Loop detection active: Server returned local HTML routing document instead of asset file raw bytes.");
-                }
-                processedTextString = contentText;
-            }
-
-            if (requestId !== currentPreviewRequestId) return;
-
+        document.getElementById('meshRelationBox').classList.add('hidden');
+        
+        if (isImage) {
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
-                        <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
+                        <img src="${liveSourceData}" class="pixelated-render">
                     </div>
                 </div>`;
-        } catch (e) {
-            if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+        } 
+        else if (isVideo) {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper relative">
+                    <div class="aspect-16-9-viewport relative">
+                        <div id="videoCenterOverlay" class="center-play-overlay">
+                            <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                        </div>
+                        <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
+                    </div>
+                    <div class="custom-control-bar">
+                        <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                        <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                                <i class="fa-solid fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            initCustomVideoController();
+        } 
+        else if (isAudio) {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper relative">
+                    <div class="aspect-16-9-viewport relative">
+                        <div id="audioCenterOverlay" class="center-play-overlay">
+                            <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                        </div>
+                        <canvas id="audioVisualizerCanvas"></canvas>
+                        <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
+                    </div>
+                    <div class="custom-control-bar">
+                        <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                        <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                                <i class="fa-solid fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            initCustomAudioController();
+        } 
+        else if (isBinary) {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper h-full">
+                    <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
+                        <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
+                            <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
+                                <span>Hexadecimal representation (First 4KB)</span>
+                                <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
+                            </div>
+                            <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
+                        </div>
+                    </div>
+                </div>`;
+            try {
+                const rawResponse = await fetch(liveSourceData);
+                if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
+                const arrayBuffer = await rawResponse.arrayBuffer();
+                if (requestId !== currentPreviewRequestId) return;
+                document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
+                const hexDump = getHexDump(arrayBuffer);
+                document.getElementById('hexDumpContainer').textContent = hexDump;
+            } catch (e) {
+                if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+            }
+        } 
+        else {
+            try {
+                let processedTextString = "";
+                if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
+                    const parts = liveSourceData.split(',');
+                    processedTextString = atob(parts[1]);
+                } else {
+                    const rawTextResponse = await fetch(liveSourceData);
+                    if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
+
+                    const contentText = await rawTextResponse.text();
+                    const sanitizedCheck = contentText.trim().toLowerCase();
+
+                    if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head')) {
+                        throw new Error("Loop detection active: Server returned local HTML routing document instead of asset file raw bytes.");
+                    }
+                    processedTextString = contentText;
+                }
+
+                if (requestId !== currentPreviewRequestId) return;
+
+                mediaBox.innerHTML = `
+                    <div class="custom-player-wrapper h-full">
+                        <div class="aspect-16-9-viewport full-viewport-mesh">
+                            <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
+                    </div>
+                </div>`;
+            } catch (e) {
+                if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+            }
         }
     }
 }
@@ -1170,9 +1003,10 @@ function cleanPreviousMediaTracks() {
     }
 }
 
-function initBabylonMeshScene(canvasId, modelUrl, filename, textureUrl) {
+function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures = [], compositeParts = []) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
+    
     babylonEngine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
     babylonScene = new BABYLON.Scene(babylonEngine);
     babylonScene.clearColor = new BABYLON.Color4(0.04, 0.04, 0.06, 1);
@@ -1182,7 +1016,7 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, textureUrl) {
     camera.wheelPrecision = 45;
     
     const atmosphericLight = new BABYLON.HemisphericLight("ambientAtmosphere", new BABYLON.Vector3(0, 1, 0), babylonScene);
-    atmosphericLight.intensity = 0.7;
+    atmosphericLight.intensity = 0.75;
     
     const keyDirectionalLight = new BABYLON.DirectionalLight("studioKeyLight", new BABYLON.Vector3(6, 12, 5), babylonScene);
     keyDirectionalLight.intensity = 1.0;
@@ -1194,57 +1028,78 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, textureUrl) {
     structuralGrid.material = gridMaterial;
     structuralGrid.position.y = -1.1;
 
-    const overlay = document.getElementById('meshTextureOverlay');
-    if (overlay) {
-        if (textureUrl) {
-            const cleanTextName = textureUrl.split('/').pop().split('?')[0];
-            overlay.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-link"></i> Auto-Mapped Texture:</span> ${decodeURIComponent(cleanTextName)}`;
+    let loadedMeshes = [];
+
+    function setupMeshTextures(material, textures) {
+        if (textures && textures.length > 0) {
+            const tex = new BABYLON.Texture(textures[0], babylonScene);
+            tex.hasAlpha = true;
+            material.diffuseTexture = tex;
+            material.specularColor = new BABYLON.Color3(0.15, 0.15, 0.15);
         } else {
-            overlay.innerHTML = `<span class="text-yellow-500 font-bold"><i class="fa-solid fa-wand-magic-sparkles"></i> Generic Material Shader</span>`;
+            material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.55);
+            material.specularColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+            material.specularPower = 32;
         }
     }
 
-    BABYLON.SceneLoader.ImportMesh("", "", modelUrl, babylonScene, function (meshes) {
-        if (!meshes || meshes.length === 0) return;
-        
-        const premiumMaterial = new BABYLON.StandardMaterial("eliteModelMat", babylonScene);
-        if (textureUrl) {
-            premiumMaterial.diffuseTexture = new BABYLON.Texture(textureUrl, babylonScene);
-            premiumMaterial.diffuseTexture.hasAlpha = true;
-            premiumMaterial.diffuseTexture.vScale = -1; // Standard adjustment for OBJ loader image orientation
-        } else {
-            premiumMaterial.diffuseColor = new BABYLON.Color3(0.85, 0.15, 0.2); 
-            premiumMaterial.specularColor = new BABYLON.Color3(1.0, 0.85, 0.0); 
-        }
-        premiumMaterial.specularPower = 32;
-        premiumMaterial.backFaceCulling = false;
-        
-        meshes.forEach(mesh => { 
-            mesh.material = premiumMaterial; 
+    function loadSingleMesh(url, extName, textures) {
+        return new Promise((resolve) => {
+            BABYLON.SceneLoader.ImportMesh("", "", url, babylonScene, function (meshes) {
+                if (!meshes || meshes.length === 0) {
+                    resolve();
+                    return;
+                }
+                const meshMat = new BABYLON.StandardMaterial("material_" + extName, babylonScene);
+                meshMat.backFaceCulling = false;
+                setupMeshTextures(meshMat, textures);
+                
+                meshes.forEach(mesh => {
+                    mesh.material = meshMat;
+                    loadedMeshes.push(mesh);
+                });
+                resolve();
+            }, null, function() {
+                resolve(); // Resolve to avoid stalling other meshes
+            }, ".obj");
         });
+    }
 
-        let min = meshes[0].getBoundingInfo().boundingBox.minimumWorld;
-        let max = meshes[0].getBoundingInfo().boundingBox.maximumWorld;
-        meshes.forEach(mesh => {
+    // Combine primary model load with sibling part updates
+    const loaderPromises = [loadSingleMesh(modelUrl, filename, associatedTextures)];
+    
+    if (compositeParts && compositeParts.length > 0) {
+        compositeParts.forEach(part => {
+            loaderPromises.push(loadSingleMesh(part.url, part.name, part.associated_textures || []));
+        });
+    }
+
+    Promise.all(loaderPromises).then(() => {
+        if (loadedMeshes.length === 0) return;
+        
+        let min = loadedMeshes[0].getBoundingInfo().boundingBox.minimumWorld;
+        let max = loadedMeshes[0].getBoundingInfo().boundingBox.maximumWorld;
+        
+        loadedMeshes.forEach(mesh => {
             const bounds = mesh.getBoundingInfo().boundingBox;
             min = BABYLON.Vector3.Minimize(min, bounds.minimumWorld);
             max = BABYLON.Vector3.Maximize(max, bounds.maximumWorld);
         });
+        
         const computedCenter = min.add(max).scale(0.5);
         const dimensionsSize = max.subtract(min);
-        const targetScaleFactor = 2.4 / Math.max(dimensionsSize.x, dimensionsSize.y, dimensionsSize.z);
-        meshes.forEach(mesh => {
+        const targetScaleFactor = 2.4 / Math.max(dimensionsSize.x, dimensionsSize.y, dimensionsSize.z || 0.01);
+        
+        loadedMeshes.forEach(mesh => {
             mesh.position.subtractInPlace(computedCenter);
             mesh.scaling = new BABYLON.Vector3(targetScaleFactor, targetScaleFactor, targetScaleFactor);
         });
-    }, null, function(scene, message, exception) {
-        console.error("BabylonJS Mesh failed to load: ", message);
-        showFallbackError("3D model parsing failed: " + message);
-    }, ".obj");
-    
+    });
+
     babylonEngine.runRenderLoop(() => { if (babylonScene) babylonScene.render(); });
     window.addEventListener("resize", resizeBabylonViewportMatrix, false);
 }
+
 function resizeBabylonViewportMatrix() { if (babylonEngine) babylonEngine.resize(); }
 
 function initCustomVideoController() {
