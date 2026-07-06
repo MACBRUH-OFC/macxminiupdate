@@ -1442,14 +1442,14 @@ function displayExtractedAssets(extractedData, requestId) {
             
             if (cat.key === 'textures') {
                 html += `
-                    <div class="p-1.5 bg-black/40 border border-zinc-800 rounded cursor-pointer hover:border-emerald-500/50 mb-1" onclick="selectFile({id: '${encodeURIComponent(asset.url)}', name: '${encodeURIComponent(fname)}', label: 'TEXTURE', url: '${encodeURIComponent(asset.url)}'}, this)">
+                    <div class="p-1.5 bg-black/40 border border-zinc-800 rounded cursor-pointer hover:border-emerald-500/50 mb-1" onclick="selectFile({id: '${encodeURIComponent(asset.url)}', name: '${encodeURIComponent(fname)}', label: 'TEXTURE', url: '${encodeURIComponent(asset.url)}', associatedTextures: ${JSON.stringify(asset.associated_textures || [])}, compositeParts: ${JSON.stringify(asset.composite_parts || [])}}, this)">
                         <img src="${asset.url}" class="w-full h-12 object-cover rounded mb-1 bg-[#09090d]">
                         <div class="text-[8px] text-zinc-400 truncate text-left">${shortName}</div>
                     </div>
                 `;
             } else {
                 html += `
-                    <div class="p-1.5 bg-black/40 border border-zinc-800 rounded cursor-pointer hover:border-emerald-500/50 mb-1 text-left" onclick="selectFile({id: '${encodeURIComponent(asset.url)}', name: '${encodeURIComponent(fname)}', label: '${cat.key.toUpperCase()}', url: '${encodeURIComponent(asset.url)}'}, this)">
+                    <div class="p-1.5 bg-black/40 border border-zinc-800 rounded cursor-pointer hover:border-emerald-500/50 mb-1 text-left" onclick="selectFile({id: '${encodeURIComponent(asset.url)}', name: '${encodeURIComponent(fname)}', label: '${cat.key.toUpperCase()}', url: '${encodeURIComponent(asset.url)}', associatedTextures: ${JSON.stringify(asset.associated_textures || [])}, compositeParts: ${JSON.stringify(asset.composite_parts || [])}}, this)">
                         <div class="text-[8px] font-mono text-zinc-400 truncate">${shortName}</div>
                     </div>
                 `;
@@ -1558,35 +1558,47 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
 
     function setupMeshTextures(material, textures) {
         if (textures && textures.length > 0) {
-            let diffuseTexUrl = textures[0];
+            let diffuseTexUrl = null;
             let normalTexUrl = null;
             let specularTexUrl = null;
             let metallicTexUrl = null;
 
-            // Scan mapped textures to identify standard channels automatically
-            textures.forEach(urlStr => {
-                const urlDecoded = decodeURIComponent(urlStr).toLowerCase();
-                if (urlDecoded.includes('_d.') || urlDecoded.includes('_d_') || urlDecoded.includes('diffuse') || urlDecoded.includes('albedo') || urlDecoded.includes('color') || urlDecoded.includes('basecolor')) {
+            textures.forEach(texObj => {
+                let urlStr = typeof texObj === 'object' ? texObj.url : texObj;
+                let fileStr = (typeof texObj === 'object' ? texObj.fileName : texObj).toLowerCase();
+
+                // Delineate channels by semantic texture suffixes
+                if (fileStr.includes('_d.') || fileStr.includes('_d_') || fileStr.includes('diffuse') || fileStr.includes('albedo') || fileStr.includes('color') || fileStr.includes('basecolor') || fileStr.includes('_d_png')) {
                     diffuseTexUrl = urlStr;
                 }
-                if (urlDecoded.includes('_n.') || urlDecoded.includes('_n_') || urlDecoded.includes('normal') || urlDecoded.includes('bump')) {
+                else if (fileStr.includes('_n.') || fileStr.includes('_n_') || fileStr.includes('normal') || fileStr.includes('bump')) {
                     normalTexUrl = urlStr;
                 }
-                if (urlDecoded.includes('_s.') || urlDecoded.includes('_s_') || urlDecoded.includes('specular') || urlDecoded.includes('gloss')) {
+                else if (fileStr.includes('_s.') || fileStr.includes('_s_') || fileStr.includes('specular') || fileStr.includes('gloss')) {
                     specularTexUrl = urlStr;
                 }
-                if (urlDecoded.includes('_m.') || urlDecoded.includes('_m_') || urlDecoded.includes('metallic') || urlDecoded.includes('metalness')) {
+                else if (fileStr.includes('_m.') || fileStr.includes('_m_') || fileStr.includes('metallic') || urlDecoded.includes('metalness')) {
                     metallicTexUrl = urlStr;
+                }
+                else {
+                    if (!diffuseTexUrl) diffuseTexUrl = urlStr;
                 }
             });
 
-            // Set diffuse texture parameters
-            const diffTex = new BABYLON.Texture(diffuseTexUrl, babylonScene);
-            diffTex.hasAlpha = true;
-            material.diffuseTexture = diffTex;
-            material.diffuseColor = new BABYLON.Color3(1, 1, 1);
+            // Default fallback albedo diffuse if no match was determined
+            if (!diffuseTexUrl) {
+                diffuseTexUrl = typeof textures[0] === 'object' ? textures[0].url : textures[0];
+            }
 
-            // Bind normal maps to materials dynamically
+            // Bind Albedo diffuse
+            if (diffuseTexUrl) {
+                const diffTex = new BABYLON.Texture(diffuseTexUrl, babylonScene);
+                diffTex.hasAlpha = true;
+                material.diffuseTexture = diffTex;
+                material.diffuseColor = new BABYLON.Color3(1, 1, 1);
+            }
+
+            // Bind depth normal bump mapping
             if (normalTexUrl) {
                 const normTex = new BABYLON.Texture(normalTexUrl, babylonScene);
                 material.bumpTexture = normTex;
@@ -1594,12 +1606,12 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
                 material.invertNormalMapY = true;
             }
 
-            // Bind specular texture channels
+            // Bind Specular highlight map
             if (specularTexUrl) {
                 const specTex = new BABYLON.Texture(specularTexUrl, babylonScene);
                 material.specularTexture = specTex;
             } else {
-                material.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+                material.specularColor = new BABYLON.Color3(0.15, 0.15, 0.15);
             }
             material.specularPower = 64;
         } else {

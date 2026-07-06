@@ -15,6 +15,12 @@ from datetime import datetime
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 # Web configuration
 BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
 FALLBACK_BASE_URL = 'https://dl-tata.freefireind.in/live/ABHotUpdates/android/'
@@ -801,6 +807,81 @@ def find_references_in_json(obj, asset_names):
     
     return referenced
 
+def merge_rgb_and_sa(rgb_bytes, sa_bytes):
+    """Combines RGB diffuse and SA textures into a single RGBA PNG using PIL"""
+    try:
+        rgb_img = Image.open(io.BytesIO(rgb_bytes)).convert("RGB")
+        sa_img = Image.open(io.BytesIO(sa_bytes)).convert("L")
+        
+        # Resize SA to match RGB if dimensions differ
+        if rgb_img.size != sa_img.size:
+            sa_img = sa_img.resize(rgb_img.size, Image.Resampling.LANCZOS)
+        
+        rgba_img = rgb_img.copy()
+        rgba_img.putalpha(sa_img)
+        
+        output = io.BytesIO()
+        rgba_img.save(output, format="PNG")
+        return output.getvalue()
+    except Exception as e:
+        print(f"Error merging RGB and SA textures: {e}")
+        return None
+
+def trigger_sa_rgb_merges(processed_assets, textures, categories):
+    """Identifies and blends RGB & SA texture assets into single RGBA cache files"""
+    textures_by_name = {t["fileName"].lower(): t for t in textures}
+    sa_pairs = []
+    
+    for t in textures:
+        fname_lower = t["fileName"].lower()
+        match = re.search(r'^(.*?)_sa\.(png|jpg|jpeg|webp)$', fname_lower)
+        if match:
+            base_without_sa = match.group(1) + "." + match.group(2)
+            if base_without_sa in textures_by_name:
+                rgb_asset = textures_by_name[base_without_sa]
+                sa_pairs.append((rgb_asset, t))
+                
+    for rgb_asset, sa_asset in sa_pairs:
+        try:
+            rgb_key = rgb_asset["url"].split("token=")[-1]
+            rgb_bytes = None
+            if rgb_key in MEMORY_ASSET_CACHE:
+                rgb_bytes = MEMORY_ASSET_CACHE[rgb_key]["content"]
+            else:
+                decoded_rgb = decode_token(rgb_key)
+                if decoded_rgb and decoded_rgb.get("url"):
+                    res = http_session.get(decoded_rgb["url"], timeout=10)
+                    if res.status_code == 200:
+                        rgb_bytes = res.content
+                        
+            sa_key = sa_asset["url"].split("token=")[-1]
+            sa_bytes = None
+            if sa_key in MEMORY_ASSET_CACHE:
+                sa_bytes = MEMORY_ASSET_CACHE[sa_key]["content"]
+            else:
+                decoded_sa = decode_token(sa_key)
+                if decoded_sa and decoded_sa.get("url"):
+                    res = http_session.get(decoded_sa["url"], timeout=10)
+                    if res.status_code == 200:
+                        sa_bytes = res.content
+                        
+            if rgb_bytes and sa_bytes:
+                merged_bytes = merge_rgb_and_sa(rgb_bytes, sa_bytes)
+                if merged_bytes:
+                    MEMORY_ASSET_CACHE[rgb_key] = {
+                        "content": merged_bytes,
+                        "filename": rgb_asset["fileName"],
+                        "content_type": "image/png"
+                    }
+                    if sa_asset in processed_assets:
+                        processed_assets.remove(sa_asset)
+                    if sa_asset in textures:
+                        textures.remove(sa_asset)
+                    if sa_asset in categories.get("textures", []):
+                        categories["textures"].remove(sa_asset)
+        except Exception as e:
+            print(f"Failed blending pair: {e}")
+
 def handle_extractor_response(response):
     """Handle extractor API response"""
     if not response.ok:
@@ -925,8 +1006,22 @@ def handle_extractor_response(response):
                         mesh_to_materials[rm_name] = rmat_name
             except Exception:
                 pass
+
+    # Group categorized explorer categories cleanly
+    categories = {
+        "3d_models": [m for m in meshes],
+        "textures": textures,
+        "materials": materials,
+        "animations": [a for a in processed_assets if "animation" in a["fileName"].lower() or "animator" in a["fileName"].lower()],
+        "configs": [a for a in processed_assets if any(ext in a["fileName"].lower() for ext in [".json", ".txt", ".dat", ".xml"]) and not any(a["fileName"] == m["fileName"] for m in meshes)],
+        "others": []
+    }
+
+    # Automatically blend matching RGB and SA diffuse/specular/albedo map pairs
+    if HAS_PIL and textures:
+        trigger_sa_rgb_merges(processed_assets, textures, categories)
     
-    # 3. Associate Textures with Meshes using Compiled reference pathways
+    # 3. Associate Textures with Meshes using Compiled reference pathways (includes URL and Original Filename)
     for m in meshes:
         m_name = os.path.splitext(os.path.basename(m["fileName"]))[0].lower()
         matched_textures = []
@@ -936,13 +1031,19 @@ def handle_extractor_response(response):
             for tex_file in material_to_textures[target_mat]:
                 for t in textures:
                     if t["fileName"].lower() == tex_file.lower():
-                        matched_textures.append(t["url"])
+                        matched_textures.append({
+                            "url": t["url"],
+                            "fileName": t["fileName"]
+                        })
         
         if not matched_textures:
             for t in textures:
                 t_name = os.path.splitext(os.path.basename(t["fileName"]))[0].lower()
                 if check_name_similarity(m_name, t_name):
-                    matched_textures.append(t["url"])
+                    matched_textures.append({
+                        "url": t["url"],
+                        "fileName": t["fileName"]
+                    })
         
         m["associated_textures"] = matched_textures
     
@@ -971,8 +1072,8 @@ def handle_extractor_response(response):
             
             for mesh_obj in all_composite_meshes:
                 used_meshes_in_composites.add(mesh_obj["fileName"])
-                for tex_url in mesh_obj["associated_textures"]:
-                    comp_textures.add(tex_url)
+                for tex_obj in mesh_obj["associated_textures"]:
+                    comp_textures.add(json.dumps(tex_obj))
             
             for mesh_obj in siblings:
                 comp_parts.append({
@@ -986,20 +1087,13 @@ def handle_extractor_response(response):
                 "name": f"{m1_basename.split('.')[0]} (Assembly Scene)",
                 "type": "Composite 3D Assembly",
                 "url": m1["url"],
-                "associated_textures": list(comp_textures),
+                "associated_textures": [json.loads(x) for x in comp_textures],
                 "composite_parts": comp_parts,
                 "preview_summary": f"Unified assembly of {len(all_composite_meshes)} structural mesh layers and {len(comp_textures)} mapped shader textures."
             })
-    
-    # Group categorized explorer categories cleanly
-    categories = {
-        "3d_models": [m for m in meshes if m["fileName"] not in used_meshes_in_composites],
-        "textures": textures,
-        "materials": materials,
-        "animations": [a for a in processed_assets if "animation" in a["fileName"].lower() or "animator" in a["fileName"].lower()],
-        "configs": [a for a in processed_assets if any(ext in a["fileName"].lower() for ext in [".json", ".txt", ".dat", ".xml"]) and not any(a["fileName"] == m["fileName"] for m in meshes)],
-        "others": []
-    }
+
+    # Clean composites references out of standard geometries explorer to avoid duplicate listings
+    categories["3d_models"] = [m for m in meshes if m["fileName"] not in used_meshes_in_composites]
     
     for asset in processed_assets:
         is_categorized = (
@@ -1121,8 +1215,10 @@ def stream_cache_logic(token):
                 response.headers["Accept-Ranges"] = "bytes"
                 response.headers["Access-Control-Allow-Origin"] = "*"
                 return response
-        except Exception:
-            pass
+            else:
+                print(f"Non-200 stream fetch status for token: {res.status_code}")
+        except Exception as e:
+            print(f"Error streaming cache from remote CDN: {e}")
     
     return "Expired or unavailable stream token payload.", 404
 
@@ -1294,6 +1390,68 @@ def bulk_zip_logic(version):
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
 
+def send_telegram_message(chat_id, text):
+    """Sends a formatted HTML text message via Telegram Bot API"""
+    url = f"{TELEGRAM_API}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+    try:
+        http_session.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Failed sending Telegram log update: {e}")
+
+def send_latest_version_to_telegram(chat_id):
+    """Scans and replies with the current active version metrics directly to Telegram"""
+    try:
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
+            candidates = [base_ver]
+            for step in [1, 2, 3]:
+                nxt = get_next_version(base_ver, step)
+                if nxt:
+                    candidates.append(nxt)
+            fetched_maps = get_multiple_file_info_data(candidates)
+            active_ver = base_ver
+            for cand in reversed(candidates):
+                if cand in fetched_maps:
+                    active_ver = cand
+                    break
+            target_ver = get_next_version(active_ver, 1)
+            msg = (
+                f"🎯 <b>Latest Live Active Version:</b>\n"
+                f"• Active Version: <code>{active_ver}</code>\n"
+                f"• Next Tracked: <code>{target_ver}</code>"
+            )
+            send_telegram_message(chat_id, msg)
+            return
+    except Exception as e:
+        print(f"Error pulling latest version on Telegram request: {e}")
+    send_telegram_message(chat_id, "⚠️ Failed to query latest version metrics from server API.")
+
+def run_version_check_to_telegram(chat_id, version):
+    """Runs a lookup for the version and replies with reference statistics to Telegram"""
+    new_text, active_version, base_url = get_file_info_data_exact(version)
+    if not new_text:
+        send_telegram_message(chat_id, f"❌ Version <code>{version}</code> logs are missing on servers.")
+        return
+        
+    lines = new_text.splitlines()
+    total_assets = len([l for l in lines if l.strip()])
+    
+    msg = (
+        f"📦 <b>Discovered Package Status:</b>\n"
+        f"• Active Version: <code>{active_version}</code>\n"
+        f"• Suffix Base URL: <code>{base_url}</code>\n"
+        f"• Total File references: <b>{total_assets} files found</b>\n\n"
+        f"Please open the dashboard web panel to view structured assets, visual previews, and download compiled ZIP files."
+    )
+    send_telegram_message(chat_id, msg)
+
 # API Endpoints
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -1325,7 +1483,7 @@ def telegram_webhook():
             protocol = "https" if "localhost" not in host else "http"
             current_url = f"{protocol}://{host}/api/webhook"
             
-            webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+            webhook_setup_url = f"{TELEGRAM_API}/setWebhook"
             setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
             
             return jsonify({
@@ -1335,8 +1493,41 @@ def telegram_webhook():
             }), 200
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
-    
-    return jsonify({"status": "ok"}), 200
+            
+    if request.method == 'POST':
+        try:
+            update = request.get_json()
+            if not update or "message" not in update:
+                return jsonify({"status": "ok"}), 200
+                
+            message = update["message"]
+            chat_id = message.get("chat", {}).get("id")
+            text = message.get("text", "").strip()
+            
+            if not chat_id or not text:
+                return jsonify({"status": "ok"}), 200
+                
+            if text.startswith("/start"):
+                send_telegram_message(chat_id, "Welcome to MINIUPDATE CHECKER Bot! Use /latest to get the newest patch, or send a version number directly (e.g. 1.111.12) to scan it.")
+            elif text.startswith("/status"):
+                check_api_health()
+                status_msg = (
+                    f"🤖 <b>System Status:</b>\n"
+                    f"• Status: <code>{HEALTH_STATUS['status']}</code>\n"
+                    f"• Version API: {'Operational' if HEALTH_STATUS['version_api'] else 'Degraded'}\n"
+                    f"• Extractor API: {'Operational' if HEALTH_STATUS['extractor_api'] else 'Degraded'}\n"
+                    f"• File Sources: {'Operational' if HEALTH_STATUS['file_sources'] else 'Degraded'}"
+                )
+                send_telegram_message(chat_id, status_msg)
+            elif text.startswith("/latest"):
+                send_latest_version_to_telegram(chat_id)
+            elif text.startswith("/check") or re.match(r'^\d+\.\d+\.\d+$', text):
+                version = text.replace("/check", "").strip() if text.startswith("/check") else text
+                run_version_check_to_telegram(chat_id, version)
+        except Exception as e:
+            print(f"Error handling Telegram Webhook: {e}")
+            
+        return jsonify({"status": "ok"}), 200
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'OPTIONS'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'OPTIONS'])
