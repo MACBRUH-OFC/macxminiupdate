@@ -551,7 +551,7 @@ def check_update_logic():
     })
 
 def check_name_similarity(name1, name2):
-    """Fuzzy word-level token matcher for Unity assets."""
+    """Normalized token alignment index mapping mesh names with texture assets safely."""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
     n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
     
@@ -1500,7 +1500,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": msg_id,
+                        "message_id": sent_msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
