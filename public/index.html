@@ -24,7 +24,6 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
 @media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
-/* Expanded layout heights for comfortable visual representation of list elements */
 .uniform-panel { 
     background: #09090d; border: 1px solid #181822; position: relative; 
     box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 680px; display: flex; 
@@ -54,7 +53,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .btn-mechanical:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #bfa600; }
 .btn-mechanical:disabled { background: #222226 !important; color: #55555c !important; box-shadow: 0 5px 0 #141416 !important; cursor: not-allowed; transform: none !important; opacity: 0.8; }
 
-.display-box-nexus { width: 100%; padding: 16px; border: 1px solid #1e1e2b; border-radius: 14px; background: #040406; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }
+.display-box-nexus { width: 100%; padding: 16px; border: 1px solid #222230; border-radius: 14px; background: #040406; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }
 .indicator-dot { width: 10px; height: 10px; background: var(--ff-emerald); border-radius: 50%; box-shadow: 0 0 12px var(--ff-emerald); animation: pulseDot 2s infinite; }
 .indicator-dot.offline { background: var(--ff-red); box-shadow: 0 0 12px var(--ff-red); }
 .indicator-dot.neutral { background: var(--ff-cyan); box-shadow: 0 0 12px var(--ff-cyan); }
@@ -554,7 +553,7 @@ function renderList() {
         const row = document.createElement('div');
         row.className = "flex flex-col rounded-xl bg-[#0b0b0f] border border-zinc-900 overflow-hidden min-w-0 mb-1";
 
-        let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+        let badgeColor = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
         if (item.status === "Modified") {
             badgeColor = "bg-amber-500/10 text-amber-400 border border-emerald-500/20";
         }
