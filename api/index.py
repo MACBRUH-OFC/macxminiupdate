@@ -1671,3 +1671,4 @@ def handle_bot_webhook():
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
+    
