@@ -574,6 +574,32 @@ def check_name_similarity(name1, name2):
             
     return False
 
+def find_references_in_json(obj, asset_names):
+    """Recursively scans parsed JSON object values for references to other files inside the bundle."""
+    referenced = []
+    strings = []
+    
+    def extract_strings(v):
+        if isinstance(v, str):
+            strings.append(v.lower())
+        elif isinstance(v, dict):
+            for val in v.values():
+                extract_strings(val)
+        elif isinstance(v, list):
+            for item in v:
+                extract_strings(item)
+                
+    extract_strings(obj)
+    
+    for name in asset_names:
+        base_name = os.path.splitext(name)[0].lower()
+        if len(base_name) > 4:
+            for s in strings:
+                if base_name in s:
+                    referenced.append(name)
+                    break
+    return referenced
+
 def handle_extractor_response(response):
     if not response.ok:
         try: err_data = response.json()
@@ -594,32 +620,105 @@ def handle_extractor_response(response):
     if not isinstance(assets_list, list):
         assets_list = []
     
-    # Process textures and meshes mapping
-    meshes = [a for a in assets_list if (a.get("name") or a.get("fileName") or "").lower().endswith(".obj")]
-    textures = [a for a in assets_list if any((a.get("name") or a.get("fileName") or "").lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
+    # Separate assets by visual groups to scan data reference connections
+    meshes = []
+    textures = []
+    materials = []
+    renderers = []
     
+    for a in assets_list:
+        name = (a.get("name") or a.get("fileName") or "").lower()
+        label = (a.get("type") or a.get("label") or "").lower()
+        
+        if name.endswith(".obj"):
+            meshes.append(a)
+        elif any(name.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]):
+            textures.append(a)
+        elif "material" in label or "material" in name:
+            materials.append(a)
+        elif "renderer" in label or "renderer" in name:
+            renderers.append(a)
+
+    # 1. Parse Materials to find referenced textures
+    material_to_textures = {}
+    for mat in materials:
+        mat_name = os.path.splitext(mat.get("name") or mat.get("fileName") or "")[0].lower()
+        mat_data = mat.get("data")
+        if isinstance(mat_data, str) and mat_data.strip().startswith("{"):
+            try: mat_data = json.loads(mat_data)
+            except Exception: pass
+        if isinstance(mat_data, (dict, list)):
+            referenced = find_references_in_json(mat_data, [t.get("name") or t.get("fileName") or "" for t in textures])
+            if referenced:
+                material_to_textures[mat_name] = referenced
+
+    # 2. Parse Renderers to map meshes to materials
+    mesh_to_materials = {}
+    for rend in renderers:
+        rend_data = rend.get("data")
+        if isinstance(rend_data, str) and rend_data.strip().startswith("{"):
+            try: rend_data = json.loads(rend_data)
+            except Exception: pass
+        if isinstance(rend_data, (dict, list)):
+            ref_meshes = find_references_in_json(rend_data, [m.get("name") or m.get("fileName") or "" for m in meshes])
+            ref_mats = find_references_in_json(rend_data, [mt.get("name") or mt.get("fileName") or "" for mt in materials])
+            
+            for rm in ref_meshes:
+                rm_name = os.path.splitext(rm)[0].lower()
+                for rmat in ref_mats:
+                    rmat_name = os.path.splitext(rmat)[0].lower()
+                    mesh_to_materials[rm_name] = rmat_name
+
+    # 3. Associate Textures with Meshes using the compiled metadata path
     for m in meshes:
-        m_name = os.path.splitext(m.get("name") or m.get("fileName") or "")[0].lower()
+        m_full_name = m.get("name") or m.get("fileName") or ""
+        m_name = os.path.splitext(m_full_name)[0].lower()
         matched_textures = []
-        for t in textures:
-            t_name = os.path.splitext(t.get("name") or t.get("fileName") or "")[0].lower()
-            if check_name_similarity(m_name, t_name):
-                t_url = t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_name.encode()).hexdigest()}"
-                
-                t_data = t.get("data", "")
-                t_bytes = None
-                if isinstance(t_data, str) and t_data:
-                    try: t_bytes = base64.b64decode(t_data)
-                    except Exception: t_bytes = t_data.encode('utf-8')
-                elif isinstance(t_data, (dict, list)):
-                    try: t_bytes = json.dumps(t_data).encode('utf-8')
-                    except Exception: pass
+        
+        # Try metadata path first: Mesh -> Renderer -> Material -> Texture
+        target_mat = mesh_to_materials.get(m_name)
+        if target_mat and target_mat in material_to_textures:
+            for tex_file in material_to_textures[target_mat]:
+                for t in textures:
+                    t_full_name = t.get("name") or t.get("fileName") or ""
+                    if t_full_name.lower() == tex_file.lower():
+                        t_url = t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_full_name.encode()).hexdigest()}"
+                        
+                        t_data = t.get("data", "")
+                        t_bytes = None
+                        if isinstance(t_data, str) and t_data:
+                            try: t_bytes = base64.b64decode(t_data)
+                            except Exception: t_bytes = t_data.encode('utf-8')
+                        elif isinstance(t_data, (dict, list)):
+                            try: t_bytes = json.dumps(t_data).encode('utf-8')
+                            except Exception: pass
+                            
+                        t_token = encode_token(t_url, t_full_name, get_mime_type(t_full_name), t_bytes)
+                        matched_textures.append(f"/api?action=stream&token={t_token}")
+                        
+        # Fallback to token similarity matcher if no metadata path matches
+        if not matched_textures:
+            for t in textures:
+                t_full_name = t.get("name") or t.get("fileName") or ""
+                t_name = os.path.splitext(t_full_name)[0].lower()
+                if check_name_similarity(m_name, t_name):
+                    t_url = t.get("preview_url") or t.get("url") or f"https://local-placeholder/{hashlib.md5(t_name.encode()).hexdigest()}"
                     
-                t_token = encode_token(t_url, t_name, get_mime_type(t_name), t_bytes)
-                matched_textures.append(f"/api?action=stream&token={t_token}")
+                    t_data = t.get("data", "")
+                    t_bytes = None
+                    if isinstance(t_data, str) and t_data:
+                        try: t_bytes = base64.b64decode(t_data)
+                        except Exception: t_bytes = t_data.encode('utf-8')
+                    elif isinstance(t_data, (dict, list)):
+                        try: t_bytes = json.dumps(t_data).encode('utf-8')
+                        except Exception: pass
+                        
+                    t_token = encode_token(t_url, t_full_name, get_mime_type(t_full_name), t_bytes)
+                    matched_textures.append(f"/api?action=stream&token={t_token}")
+                    
         m["associated_textures"] = matched_textures
 
-    # Assemble composite groups based on common semantic name overlap
+    # Group sibling parts for concurrent rendering using name similarity matching
     for i, m1 in enumerate(meshes):
         m1_name = os.path.splitext(m1.get("name") or m1.get("fileName") or "")[0].lower()
         m1_other_parts = []
@@ -653,7 +752,6 @@ def handle_extractor_response(response):
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
         detected_content_type = get_mime_type(filename_str)
         
-        # Read structured metadata properties, MonoBehaviour configurations or GameData safely
         structured_data = None
         for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
             val = asset.get(key)
@@ -671,7 +769,6 @@ def handle_extractor_response(response):
         file_bytes = b""
         if structured_data is not None:
             try:
-                # Format MonoBehaviour metadata and GameData configuration cleanly 
                 json_str = json.dumps(structured_data, indent=2, ensure_ascii=False)
                 file_bytes = json_str.encode('utf-8')
                 detected_content_type = "application/json"
@@ -688,10 +785,8 @@ def handle_extractor_response(response):
         remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
         if not remote_preview_url:
             if not file_bytes:
-                # Still add it with empty placeholder bytes so user can see it in accordion list!
                 file_bytes = b"{}"
                 detected_content_type = "application/json"
-                
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
 
@@ -1405,7 +1500,7 @@ def handle_bot_webhook():
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
-                        "message_id": sent_msg_id,
+                        "message_id": msg_id,
                         "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
