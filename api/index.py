@@ -744,10 +744,17 @@ def check_update_logic():
     })
 
 def check_name_similarity(name1, name2):
-    """Check name similarity"""
+    """Check name similarity across models and textures with standard suffix handling"""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
     n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
     
+    # Strip common suffix identifiers to check true base name mappings
+    base1 = re.sub(r'\s+(d|n|s|m|albedo|normal|specular|metallic|metal|roughness|ao|color|diffuse)$', '', n1)
+    base2 = re.sub(r'\s+(d|n|s|m|albedo|normal|specular|metallic|metal|roughness|ao|color|diffuse)$', '', n2)
+    
+    if base1 == base2 or base1 in base2 or base2 in base1:
+        return True
+        
     tokens1 = set(t for t in n1.split() if len(t) > 2)
     tokens2 = set(t for t in n2.split() if len(t) > 2)
     
@@ -865,11 +872,13 @@ def handle_extractor_response(response):
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
         
-        MEMORY_ASSET_CACHE[cache_key] = {
-            "content": file_bytes,
-            "filename": filename_str,
-            "content_type": detected_content_type
-        }
+        # ONLY populate cache if the actual binary payload is present to prevent blank 0-byte caching
+        if file_bytes:
+            MEMORY_ASSET_CACHE[cache_key] = {
+                "content": file_bytes,
+                "filename": filename_str,
+                "content_type": detected_content_type
+            }
         
         local_proxy_route = f"/api?action=stream&token={local_cache_token}"
         asset["preview_url"] = local_proxy_route

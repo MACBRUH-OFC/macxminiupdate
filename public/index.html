@@ -1558,10 +1558,50 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
 
     function setupMeshTextures(material, textures) {
         if (textures && textures.length > 0) {
-            const tex = new BABYLON.Texture(textures[0], babylonScene);
-            tex.hasAlpha = true;
-            material.diffuseTexture = tex;
-            material.specularColor = new BABYLON.Color3(0.15, 0.15, 0.15);
+            let diffuseTexUrl = textures[0];
+            let normalTexUrl = null;
+            let specularTexUrl = null;
+            let metallicTexUrl = null;
+
+            // Scan mapped textures to identify standard channels automatically
+            textures.forEach(urlStr => {
+                const urlDecoded = decodeURIComponent(urlStr).toLowerCase();
+                if (urlDecoded.includes('_d.') || urlDecoded.includes('_d_') || urlDecoded.includes('diffuse') || urlDecoded.includes('albedo') || urlDecoded.includes('color') || urlDecoded.includes('basecolor')) {
+                    diffuseTexUrl = urlStr;
+                }
+                if (urlDecoded.includes('_n.') || urlDecoded.includes('_n_') || urlDecoded.includes('normal') || urlDecoded.includes('bump')) {
+                    normalTexUrl = urlStr;
+                }
+                if (urlDecoded.includes('_s.') || urlDecoded.includes('_s_') || urlDecoded.includes('specular') || urlDecoded.includes('gloss')) {
+                    specularTexUrl = urlStr;
+                }
+                if (urlDecoded.includes('_m.') || urlDecoded.includes('_m_') || urlDecoded.includes('metallic') || urlDecoded.includes('metalness')) {
+                    metallicTexUrl = urlStr;
+                }
+            });
+
+            // Set diffuse texture parameters
+            const diffTex = new BABYLON.Texture(diffuseTexUrl, babylonScene);
+            diffTex.hasAlpha = true;
+            material.diffuseTexture = diffTex;
+            material.diffuseColor = new BABYLON.Color3(1, 1, 1);
+
+            // Bind normal maps to materials dynamically
+            if (normalTexUrl) {
+                const normTex = new BABYLON.Texture(normalTexUrl, babylonScene);
+                material.bumpTexture = normTex;
+                material.invertNormalMapX = true;
+                material.invertNormalMapY = true;
+            }
+
+            // Bind specular texture channels
+            if (specularTexUrl) {
+                const specTex = new BABYLON.Texture(specularTexUrl, babylonScene);
+                material.specularTexture = specTex;
+            } else {
+                material.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+            }
+            material.specularPower = 64;
         } else {
             material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.55);
             material.specularColor = new BABYLON.Color3(0.8, 0.8, 0.8);
