@@ -39,11 +39,11 @@ FILE_INFO_CACHE = {}
 EXTRACTED_FILES_CACHE = {}
 MEMORY_ASSET_CACHE = {}
 
-# Stateless short-lived in-memory mappings to stop database repinning spam
+# Stateless short-lived in-memory mappings to stop database spam
 BOT_TEMP_MAPPINGS = {}
 PURGED_LEGACY_DB = False
 
-# List of allowed user IDs permitted in private chats (Owner is natively allowed)
+# List of allowed user IDs permitted in private chats
 ALLOWED_USERS = [OWNER_ID]
 
 def get_mime_type(filename):
@@ -116,7 +116,6 @@ def encode_suffix(suffix):
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
 def get_file_info_data_exact(version):
-    """Fetches exact version without fallback."""
     if version in FILE_INFO_CACHE:
         return FILE_INFO_CACHE[version]
         
@@ -133,7 +132,6 @@ def get_file_info_data_exact(version):
     return None, None, None
 
 def get_file_info_data(version):
-    """Primary fetch routine."""
     return get_file_info_data_exact(version)
 
 def get_multiple_file_info_data(versions):
@@ -165,7 +163,6 @@ def get_multiple_file_info_data(versions):
     return results
 
 def find_latest_active_version(requested_version):
-    """Scans the requested version as well as the next 3 versions in parallel on the web."""
     candidates = [requested_version]
     for step in [1, 2, 3]:
         nxt = get_next_version(requested_version, step)
@@ -373,104 +370,73 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
-def generate_update_intelligence(version, files_list, new_items):
-    """Categorizes update files and infers why specific changes were introduced."""
-    vfx_files = []
-    weapon_files = []
-    emote_files = []
-    bundle_files = []
-    config_files = []
-    ui_files = []
-    code_files = []
-    other_files = []
+def analyze_update_purpose(files, new_items):
+    """Parses file changes to deduce semantic intentions for the update briefing."""
+    categories = set()
+    highlights = []
     
-    weapon_keywords = ['weapon', 'aug', 'm249', 'mp40', 'ak', 'm1014', 'groza', 'famas', 'scar', 'ump', 'thompson', 'woodpecker', 'awm', 'kar98k', 'desert_eagle', 'pistol', 'scythe', 'knife', 'm1887', 'g18', 'usp', 'mac10', 'vector', 'bizon', 'gun', 'skin', 'weaponscopeskin']
+    obj_count = sum(1 for f in files if f["fileName"].lower().endswith(".obj"))
+    png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg"]))
+    config_count = sum(1 for f in files if "config/" in f["fileName"].lower())
+    loc_count = sum(1 for f in files if "localization/" in f["fileName"].lower())
+    sound_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".ogg", ".wav", ".mp3"]))
     
-    for f in files_list:
-        name = f["fileName"].lower()
-        if 'vfx' in name:
-            vfx_files.append(f)
-        elif any(kw in name for kw in weapon_keywords):
-            weapon_files.append(f)
-        elif 'emote' in name or 'pose' in name or 'action' in name or 'dance' in name:
-            emote_files.append(f)
-        elif 'bundle' in name or 'outfit' in name or 'costume' in name or 'hair' in name or 'shoes' in name or 'pants' in name or 'shirt' in name or 'suit' in name:
-            bundle_files.append(f)
-        elif 'config' in name or 'itemhotfix' in name or 'lochotfix' in name or 'json' in name or 'xml' in name:
-            config_files.append(f)
-        elif 'ui/' in name or 'shop' in name or 'store' in name or 'banner' in name or 'loading' in name or 'uidraw' in name:
-            ui_files.append(f)
-        elif 'codepatch' in name or 'patch' in name or 'so' in name or 'dll' in name:
-            code_files.append(f)
-        else:
-            other_files.append(f)
-
-    purposes = []
-    if weapon_files or any('weapon' in item['name'].lower() for item in new_items):
-        weapons_detected = []
-        for kw in ['aug', 'm249', 'mp40', 'ak', 'm1014', 'scar', 'awm', 'm1887']:
-            if any(kw in f["fileName"].lower() for f in files_list) or any(kw in item['name'].lower() for item in new_items):
-                weapons_detected.append(kw.upper())
-        weapons_str = f" ({', '.join(weapons_detected)})" if weapons_detected else ""
-        purposes.append(f"🔥 Weapon Skin Launch{weapons_str} - Pushing high-tier visual skins, scoping upgrades, and matching bullet VFX shaders.")
+    if obj_count > 0:
+        categories.add("3D Visual Models")
+        highlights.append(f"Injected {obj_count} high-fidelity 3D meshes")
+    if png_count > 0:
+        categories.add("High-Res Textures")
+        highlights.append(f"Added {png_count} render mapping sprites/textures")
+    if config_count > 0:
+        categories.add("Gameplay Config")
+        highlights.append("Modified gameplay attribute settings or balance rules")
+    if loc_count > 0:
+        categories.add("Localization / Texts")
+        highlights.append("Updated localized text strings")
+    if sound_count > 0:
+        categories.add("Audio Effects")
+        highlights.append(f"Updated {sound_count} acoustic assets/effects")
         
-    if emote_files or any('emote' in item['name'].lower() or 'pose' in item['name'].lower() for item in new_items):
-        purposes.append("💃 Emote & Character Pose Integration - Adding new celebration animations and shop display poses.")
-        
-    if bundle_files or any(item.get('is_bundle') for item in new_items):
-        purposes.append("📦 Outfit Bundle Releases - Deploying multi-component outfit sets, costumes, and skin items to the shop.")
-        
-    if ui_files or any('shop' in f["fileName"].lower() for f in files_list):
-        purposes.append("🎨 Event Shop & Draw UI Update - Updating local draw shops, store banners, and unlimited cardpool interface structures.")
-        
-    if code_files:
-        purposes.append("⚙️ Client Code Hotfix - Deploying system execution compiled patches, local memory performance optimizations, or script fixes.")
-        
-    if not purposes:
-        purposes.append("📦 General Maintenance Update - Synchronizing catalog indexes, local assets, and localization text adjustments.")
-
-    modified_explanations = []
-    modified_files = [f for f in files_list if f.get("status") == "Modified"]
-    new_files = [f for f in files_list if f.get("status") == "New"]
-    
-    for f in modified_files[:4]:
-        name = f["fileName"]
-        if 'config' in name.lower() or 'itemhotfix' in name.lower() or 'lochotfix' in name.lower():
-            modified_explanations.append(f"Updated config entry <b>{name.split('/')[-1]}</b> to synchronize backend item indexes and translations.")
-        elif 'codepatch' in name.lower():
-            modified_explanations.append(f"Re-compiled script patch <b>{name.split('/')[-1]}</b> to implement code corrections or anti-cheat updates.")
-        elif 'vfx' in name.lower():
-            modified_explanations.append(f"Modified VFX bundle <b>{name.split('/')[-1]}</b> to optimize visual effects or adjust asset resolution.")
-        else:
-            modified_explanations.append(f"Updated asset bundle <b>{name.split('/')[-1]}</b> with updated geometry, shaders, or texture maps.")
+    weapon_skins = set()
+    emotes = set()
+    for f in files:
+        fname = f["fileName"].lower()
+        for g in ["aug", "m249", "ak47", "scar", "m1887", "mp5", "groza", "awm", "desert_eagle"]:
+            if g in fname:
+                weapon_skins.add(g.upper())
+        if "emote" in fname or "motion" in fname:
+            emotes.add(fname.split('/')[-1])
             
-    if len(modified_files) > 4:
-        modified_explanations.append(f"And {len(modified_files) - 4} other modified elements updated for client compatibility.")
+    if weapon_skins:
+        categories.add("Weapon Customization")
+        highlights.append(f"New cosmetics or parameters for: {', '.join(weapon_skins)}")
+    if emotes:
+        categories.add("Expressive Emotes")
+        highlights.append(f"New animation sequences: {', '.join(list(emotes)[:2])}")
+        
+    if new_items:
+        categories.add("Content Update")
+        bundle_count = sum(1 for i in new_items if i.get("is_bundle"))
+        if bundle_count > 0:
+            categories.add("Exclusive Costumes")
+            highlights.append(f"Discovered {bundle_count} item bundles")
+        item_names = [i["name"] for i in new_items[:3]]
+        highlights.append(f"Added new inventory assets: {', '.join(item_names)}")
 
-    total_added = len(new_files)
-    total_modified = len(modified_files)
-    items_count = len(new_items)
-    
-    summary_paragraph = (
-        f"This miniupdate (version {version}) was deployed to synchronize client catalog parameters. "
-        f"It consists of {total_added} brand new asset packages and {total_modified} modified bundles. "
-        f"Specifically, {items_count} premium catalog items were identified in the itemhotfix database. "
-        "The client has received visual and structural updates to support the corresponding events."
-    )
-
+    if "Gameplay Config" in categories and len(categories) == 1:
+        summary = "This mini-update acts as a tactical hotfix modifying underlying server gameplay rules or parameters."
+    elif "3D Visual Models" in categories or "High-Res Textures" in categories:
+        summary = "This update introduces visual content enhancements, skin updates, and textures for localized events."
+        if weapon_skins:
+            summary += f" Specifically targeting visual attributes for weapon models ({', '.join(weapon_skins)})."
+    else:
+        summary = "This is a standard client synchronization maintenance patch coordinating game asset metadata rules."
+        
     return {
-        "purposes": purposes,
-        "modified_explanations": modified_explanations,
-        "summary_paragraph": summary_paragraph,
-        "categories": {
-            "weapons_count": len(weapon_files),
-            "vfx_count": len(vfx_files),
-            "emotes_count": len(emote_files),
-            "bundles_count": len(bundle_files),
-            "config_count": len(config_files),
-            "ui_count": len(ui_files),
-            "code_count": len(code_files)
-        }
+        "summary": summary,
+        "categories": list(categories) if categories else ["Maintenance Patch"],
+        "highlights": highlights,
+        "severity": "Visual Content" if "3D Visual Models" in categories else "System Synced"
     }
 
 def latest_version_logic():
@@ -574,7 +540,7 @@ def check_update_logic():
     except Exception as e:
         print(f"Error parsing game items hotfix: {e}")
         
-    intelligence = generate_update_intelligence(active_version, file_infos, new_items)
+    analysis = analyze_update_purpose(file_infos, new_items)
     
     return jsonify({
         "success": True,
@@ -582,7 +548,7 @@ def check_update_logic():
         "totalSize": total_size,
         "files": file_infos,
         "new_items": new_items,
-        "intelligence": intelligence
+        "analysis": analysis
     })
 
 def handle_extractor_response(response):
@@ -597,6 +563,47 @@ def handle_extractor_response(response):
         return jsonify({"success": False, "message": f"Invalid JSON returned from extractor: {str(e)}"}), 500
 
     assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
+    
+    # 3D Mesh Assembly and Texture Alignment
+    meshes = [a for a in assets_list if (a.get("name") or a.get("fileName") or "").lower().endswith(".obj")]
+    textures = [a for a in assets_list if any((a.get("name") or a.get("fileName") or "").lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
+    
+    for m in meshes:
+        m_name = os.path.splitext(m.get("name") or m.get("fileName") or "")[0].lower()
+        matched_textures = []
+        for t in textures:
+            t_name = os.path.splitext(t.get("name") or t.get("fileName") or "")[0].lower()
+            # Link texture if naming overlapping or close matching exists
+            if m_name in t_name or t_name in m_name or m_name.replace("_mesh", "") in t_name:
+                t_token = encode_token(t.get("preview_url") or t.get("url"), t_name, get_mime_type(t_name))
+                matched_textures.append(f"/api?action=stream&token={t_token}")
+        m["associated_textures"] = matched_textures
+
+    # Assemble composite groups based on common prefix groups
+    from collections import defaultdict
+    prefix_groups = defaultdict(list)
+    for m in meshes:
+        name = m.get("name") or m.get("fileName") or ""
+        parts = re.split(r'[_-\s]', name)
+        if len(parts) > 1:
+            prefix = "_".join(parts[:3]).lower()
+        else:
+            prefix = name.lower()
+        prefix_groups[prefix].append(m)
+
+    for prefix, group_meshes in prefix_groups.items():
+        if len(group_meshes) > 1:
+            for m in group_meshes:
+                m["composite_group"] = prefix
+                m["composite_parts"] = [
+                    {
+                        "name": other.get("name") or other.get("fileName"),
+                        "url": f"/api?action=stream&token={encode_token(other.get('preview_url') or other.get('url'), other.get('name') or other.get('fileName'), 'application/octet-stream')}",
+                        "associated_textures": other.get("associated_textures", [])
+                    }
+                    for other in group_meshes if other != m
+                ]
+
     for asset in assets_list:
         remote_preview_url = asset.get("preview_url") or asset.get("url")
         if not remote_preview_url: continue
@@ -623,6 +630,7 @@ def handle_extractor_response(response):
         local_proxy_route = f"/api?action=stream&token={local_cache_token}"
         if "preview_url" in asset: asset["preview_url"] = local_proxy_route
         if "url" in asset: asset["url"] = local_proxy_route
+        
     if "files" not in extractor_data and "assets" in extractor_data:
         extractor_data["files"] = extractor_data["assets"]
     elif "assets" not in extractor_data and "files" in extractor_data:
@@ -933,13 +941,9 @@ def is_user_allowed(user_id):
     return False
 
 def is_action_permitted(chat_id, user_id):
-    """Checks if the user has permission to interact with the bot."""
-    if user_id == OWNER_ID:
-        return True
-    if str(chat_id) == GROUP_ID:
-        return True
-    if is_user_allowed(user_id):
-        return True
+    if user_id == OWNER_ID: return True
+    if str(chat_id) == GROUP_ID: return True
+    if is_user_allowed(user_id): return True
     return False
 
 def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
@@ -962,44 +966,11 @@ def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title=
     db["allowed_users"] = allowed
     save_db(db)
 
-def add_pending_request(user_id, first_name, username, chat_title):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    if not any(p["user_id"] == user_id for p in pending):
-        pending.append({
-            "user_id": user_id,
-            "first_name": first_name,
-            "username": username,
-            "chat_title": chat_title
-        })
-        db["pending_requests"] = pending
-        write_db_to_chat(OWNER_ID, db)
-
-def remove_pending_request(user_id):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    pending = [p for p in pending if p["user_id"] != user_id]
-    db["pending_requests"] = pending
-    write_db_to_chat(OWNER_ID, db)
-
 def send_access_request_menu(chat_id, user_id):
-    send_message(chat_id, "🔒 Private access verification required. Requesting authentication...")
-    add_pending_request(user_id, "Unknown", "None", "Private Conversation")
-    
-    # Submits automated auth verification triggers to the Owner
-    http_session.post(f"{TELEGRAM_API}/sendMessage", json={
-        "chat_id": OWNER_ID,
-        "text": f"👤 Access authorization query pending from requester profile ID: {user_id}",
-        "reply_markup": {
-            "inline_keyboard": [
-                [{"text": "✅ Approve Request", "callback_data": f"auth_approve_{user_id}"}],
-                [{"text": "❌ Reject Request", "callback_data": f"auth_reject_{user_id}"}]
-            ]
-        }
-    }, timeout=10)
+    keyboard = [[{"text": "🔑 Request Authorization", "callback_data": f"req_access_{user_id}"}]]
+    send_message_with_keyboard(chat_id, "🔒 Access Restricted.\nYou do not have permission to utilize this utility yet.", {"inline_keyboard": keyboard})
 
 def run_miniupdate_extraction_details(version):
-    """Processes version changes and formats structured details with integrated intelligence analysis."""
     new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
         return f"❌ Version <b>{version}</b> not found.", None, {}
@@ -1053,38 +1024,37 @@ def run_miniupdate_extraction_details(version):
 
     size_mb = round(total_size / (1024 * 1024), 2)
     
+    # Run Semantic Update Analysis
+    simple_file_list = [{"fileName": entry[0]} for entry in file_entries]
     new_items = []
     try:
         new_items = extract_new_game_items(version, new_text)
     except Exception: pass
-
-    # Run Intelligence Generation to analyze purposes
-    file_infos_temp = [{"fileName": fe[0], "status": fe[1], "size": fe[2]} for fe in file_entries]
-    intelligence = generate_update_intelligence(version, file_infos_temp, new_items)
-
+    
+    analysis = analyze_update_purpose(simple_file_list, new_items)
+    
     msg = [
-        "<b>╭─📊 MINIUPDATE INTELLIGENCE REPORT ────</b>",
+        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
         "│",
-        f"├ 🟢 Target Version: <b>{version}</b>",
-        f"├ Active File Updates Size: <b>{size_mb} MB</b>",
-        f"├ Packages Added: <b>{new_files_count}</b> | Modified: <b>{changed_files_count}</b>",
+        f"├ 🟢 Version Extracted: <b>{version}</b>",
+        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
+        f"├ Changed Files Count: <b>{changed_files_count}</b>",
+        f"├ New Files Count: <b>{new_files_count}</b>",
         "│",
-        "├ 🧠 <b>PATCH INTEL FOCUS SUMMARY:</b>"
+        "├ 🧠 INTEL REPORT:",
+        f"│ <code>{analysis['summary']}</code>",
+        "│"
     ]
     
-    for purpose in intelligence["purposes"][:3]:
-        msg.append(f"│  ▫️ {purpose}")
-    msg.append("│")
-    
-    if intelligence["modified_explanations"]:
-        msg.append("├ 🔧 <b>NOTABLE SYSTEM ALTERATIONS:</b>")
-        for expl in intelligence["modified_explanations"][:3]:
-            msg.append(f"│  ▫️ {expl}")
+    if analysis['highlights']:
+        msg.append("├ 💡 KEY HIGHLIGHTS:")
+        for highlight in analysis['highlights'][:5]:
+            msg.append(f"│ • {highlight}")
         msg.append("│")
-
-    msg.append("├ 📂 DISCOVERED FILES SUMMARY:")
+        
+    msg.append("├ 📂 DISCOVERED FILES:")
     msg.append("<blockquote>")
-    max_visible_files = 12
+    max_visible_files = 15
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
         sz_kb = round(sz / 1024, 1)
         if sz_kb >= 1024:
@@ -1094,7 +1064,8 @@ def run_miniupdate_extraction_details(version):
             
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b> <i>({stat}, {sz_display})</i>")
+        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
+        msg.append(f"      <i>({stat}, {sz_display})</i>")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
@@ -1102,13 +1073,14 @@ def run_miniupdate_extraction_details(version):
 
     if new_items:
         msg.append("│")
-        msg.append("├ ✨ HIGH-VALUE INTRODUCED ITEMS:")
+        msg.append("├ ✨ NEW GAME ITEMS:")
         msg.append("<blockquote>")
-        for idx, item in enumerate(new_items[:8], 1):
+        for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a> <code>ID: {item['id']}</code>")
-        if len(new_items) > 8:
-            msg.append(f"... and {len(new_items) - 8} more catalog items.")
+            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
+            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
+        if len(new_items) > 12:
+            msg.append(f"... and {len(new_items) - 12} more items.")
         msg.append("</blockquote>")
 
     msg.append("╰──────────────────────")
@@ -1195,10 +1167,10 @@ def telegram_webhook():
             setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
             
             diagnostic_text = (
-                "<b>🔔 MINIUPDATE BOT WEBHOOK SYSTEM ACTIVE</b>\n\n"
-                f"🟢 Webhook successfully registered and monitored.\n"
-                f"🔗 Webhook Target Endpoint: <code>{current_url}</code>\n"
-                f"📦 Telegram Pipeline Response: <code>{json.dumps(setup_res)}</code>"
+                "<b>🔔 MINIUPDATE BOT ONLINE</b>\n\n"
+                "🟢 Webhook successfully compiled and is active!\n"
+                f"🔗 Webhook Registered: <code>{current_url}</code>\n"
+                f"📦 Telegram Response: <code>{json.dumps(setup_res)}</code>"
             )
             send_message(OWNER_ID, diagnostic_text, parse_mode="HTML")
             
@@ -1238,7 +1210,6 @@ def handle_all_requests(path):
     elif action == 'stream':
         return stream_cache_logic(request.args.get('token'))
 
-    # Serve webpage index file statically
     if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
         try:
             for filename in ['api/index.html', 'public/index.html', 'index.html']:
@@ -1266,12 +1237,10 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
-            # Secure action bypass for allowed group chat
             if not is_action_permitted(chat_id, user_id):
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
@@ -1283,7 +1252,6 @@ def handle_bot_webhook():
                 first_name = cb_user.get("first_name", "Unknown")
                 username = cb_user.get("username", "None")
                 
-                # Manual request authorization prompting Owner's Personal Chat
                 http_session.post(f"{TELEGRAM_API}/sendMessage", json={
                     "chat_id": OWNER_ID,
                     "text": (
@@ -1301,7 +1269,6 @@ def handle_bot_webhook():
                     }
                 }, timeout=10)
                 
-                # Edit requester's button feedback state
                 http_session.post(f"{TELEGRAM_API}/editMessageText", json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
@@ -1333,12 +1300,11 @@ def handle_bot_webhook():
                 ver = data.replace("check_ver_", "").replace("back_ver_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
-                # Show dynamic in-progress tracking state in-place
                 url = f"{TELEGRAM_API}/editMessageText"
                 http_session.post(url, json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
-                    "text": f"⏳ Fetching intelligence bulletin for version: <b>{ver}</b>...",
+                    "text": f"⏳ Checking miniupdate version <b>{ver}</b>...",
                     "parse_mode": "HTML"
                 }, timeout=10)
                 
@@ -1347,17 +1313,6 @@ def handle_bot_webhook():
                     keyboard = []
                     if file_entries:
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                        # Embed visual mapping callbacks inside the bulletin inline keyboard
-                        quick_buttons = []
-                        for fid, stat, sz in file_entries[:4]:
-                            mapping_id = file_keyboard_mappings.get(fid)
-                            if mapping_id:
-                                short_name = fid.split('/')[-1]
-                                if len(short_name) > 18:
-                                    short_name = short_name[:15] + "..."
-                                quick_buttons.append({"text": f"🔍 {short_name}", "callback_data": f"ext_bnd_{mapping_id}"})
-                        for i in range(0, len(quick_buttons), 2):
-                            keyboard.append(quick_buttons[i:i+2])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
@@ -1372,7 +1327,7 @@ def handle_bot_webhook():
                     http_session.post(url, json={
                         "chat_id": chat_id,
                         "message_id": msg_id,
-                        "text": f"❌ Target parameters log missing for version: <b>{ver}</b>",
+                        "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
 
@@ -1398,12 +1353,11 @@ def handle_bot_webhook():
                     target_url = meta.get("url")
                     ver = meta.get("version", "1.126.6")
                     
-                    # Update message to show "Extracting" progress state
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
                         "message_id": msg_id,
-                        "text": f"⏳ Decompressing and mining structural indices: <b>{file_name}</b>...",
+                        "text": f"⏳ Extracting bundle: <b>{file_name}</b>...",
                         "parse_mode": "HTML"
                     }, timeout=10)
                     
@@ -1418,7 +1372,7 @@ def handle_bot_webhook():
                                 {"text": "📦 Download All as ZIP", "callback_data": f"ext_all_{mapping_id}"},
                                 {"text": "🔍 Download Specific File", "callback_data": f"ext_spec_{mapping_id}"}
                             ],
-                            [{"text": "⬅️ Back to Report Details", "callback_data": f"back_ver_{ver}"}]
+                            [{"text": "⬅️ Back to Version Details", "callback_data": f"back_ver_{ver}"}]
                         ]
                         
                         url = f"{TELEGRAM_API}/editMessageText"
@@ -1590,21 +1544,19 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching
             if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
                 version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
                 if version_match:
                     ver = version_match.group(1)
-                    keyboard = [[{"text": f"🔍 Inspect Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
+                    keyboard = [[{"text": f"🔍 Check Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
                     send_message_with_keyboard(chat_id, (
                         "╭──────────────────────\n"
-                        "├ New MINIUPDATE DETECTED\n"
+                        "├ New MINIUPDATE\n"
                         f"├ Version: <b>{ver}</b>\n"
                         "╰──────────────────────"
                     ), {"inline_keyboard": keyboard}, parse_mode="HTML")
                     return jsonify({"status": "ok"}), 200
 
-            # Access controls for private interaction commands
             if raw_text.startswith("/"):
                 if not is_action_permitted(chat_id, user_id):
                     if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract"):
@@ -1614,10 +1566,10 @@ def handle_bot_webhook():
             if raw_text.startswith("/start"):
                 send_message(chat_id, (
                     "╭─⚡ MINIUPDATE CHECKER BOT ────\n│\n"
-                    "├ Welcome! Core parsing channels are fully online. 🎉\n│\n"
-                    "├ ⚙️ SYSTEM COMMANDS:\n"
+                    "├ Welcome! You are an approved user. 🎉\n│\n"
+                    "├ ⚙️ COMMANDS:\n"
                     "├ ▫️ /check [version]\n"
-                    "├ ▫️ /extract [reply to any asset file document]\n"
+                    "├ ▫️ /extract [replying to any asset file]\n"
                     "╰──────────────────────"
                 ))
 
@@ -1628,7 +1580,7 @@ def handle_bot_webhook():
                     return jsonify({"status": "ok"}), 200
                 ver = parts[1].strip()
                 
-                sent_msg = send_message(chat_id, f"⏳ Generating intelligence report for version: <b>{ver}</b>...", parse_mode="HTML")
+                sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
                 if not sent_msg or not sent_msg.get("ok"):
                     return jsonify({"status": "ok"}), 200
                 
@@ -1639,16 +1591,6 @@ def handle_bot_webhook():
                     keyboard = []
                     if file_entries:
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
-                        quick_buttons = []
-                        for fid, stat, sz in file_entries[:4]:
-                            mapping_id = file_keyboard_mappings.get(fid)
-                            if mapping_id:
-                                short_name = fid.split('/')[-1]
-                                if len(short_name) > 18:
-                                    short_name = short_name[:15] + "..."
-                                quick_buttons.append({"text": f"🔍 {short_name}", "callback_data": f"ext_bnd_{mapping_id}"})
-                        for i in range(0, len(quick_buttons), 2):
-                            keyboard.append(quick_buttons[i:i+2])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
                     payload = {
@@ -1666,7 +1608,7 @@ def handle_bot_webhook():
                     http_session.post(url, json={
                         "chat_id": chat_id,
                         "message_id": sent_msg_id,
-                        "text": f"❌ Target parameters log missing for version: <b>{ver}</b>",
+                        "text": f"❌ Version <b>{ver}</b> not found.",
                         "parse_mode": "HTML"
                     }, timeout=10)
 
@@ -1691,6 +1633,7 @@ def handle_bot_webhook():
                                     sub_files = parse_bundle_subfiles(None, is_local_upload=True, upload_bytes=res.content, filename=file_name)
                                     if sub_files:
                                         mapping_id = str(uuid.uuid4())[:8]
+                                        
                                         BOT_TEMP_MAPPINGS[mapping_id] = {
                                             "url": dl_url,
                                             "filename": file_name
@@ -1723,7 +1666,7 @@ def handle_bot_webhook():
                     else:
                         send_message(chat_id, "❌ Replying message does not contain a file document attachment.")
                 else:
-                    send_message(chat_id, "╭─❌ USAGE\n╰─Reply to any asset file document in the group with '/extract'.")
+                    send_message(chat_id, "❌ Reply to any asset file document in the group with '/extract'.")
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
