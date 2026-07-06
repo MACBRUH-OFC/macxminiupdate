@@ -24,9 +24,10 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 .main-grid-container { display: grid; grid-template-columns: repeat(1, 1fr); gap: 24px; max-width: 1400px; margin: 0 auto; padding: 0 20px 40px 20px; }
 @media (min-width: 1024px) { .main-grid-container { grid-template-columns: repeat(3, 1fr); } }
 
+/* Increased default panel height to allow files list plenty of visual space */
 .uniform-panel { 
     background: #09090d; border: 1px solid #181822; position: relative; 
-    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 530px; display: flex; 
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); height: 680px; display: flex; 
     flex-direction: column; transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1); min-width: 0; 
 }
 
@@ -36,8 +37,8 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
     .panel-3 { border-radius: 0 20px 20px 0; }
 }
 @media (max-width: 1023px) {
-    .uniform-panel { border-radius: 16px; margin-bottom: 16px; height: 460px !important; }
-    #previewTargetWorkspace { height: 530px !important; }
+    .uniform-panel { border-radius: 16px; margin-bottom: 16px; height: auto !important; min-height: 520px; }
+    #previewTargetWorkspace { height: 620px !important; }
 }
 
 .uniform-panel::before { content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--ff-yellow); z-index: 10; }
@@ -553,7 +554,7 @@ function renderList() {
 
         let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
         if (item.status === "Modified") {
-            badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            badgeColor = "bg-amber-500/10 text-amber-400 border-emerald-500/20";
         }
 
         row.innerHTML = `
@@ -956,8 +957,8 @@ async function selectFile(item, element) {
                     <div class="custom-player-wrapper h-full">
                         <div class="aspect-16-9-viewport full-viewport-mesh">
                             <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
-                    </div>
-                </div>`;
+                        </div>
+                    </div>`;
             } catch (e) {
                 if (requestId === currentPreviewRequestId) showFallbackError(e.message);
             }
@@ -1060,12 +1061,11 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
                 });
                 resolve();
             }, null, function() {
-                resolve(); // Resolve to avoid stalling other meshes
+                resolve(); 
             }, ".obj");
         });
     }
 
-    // Combine primary model load with sibling part updates
     const loaderPromises = [loadSingleMesh(modelUrl, filename, associatedTextures)];
     
     if (compositeParts && compositeParts.length > 0) {
