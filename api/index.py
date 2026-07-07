@@ -115,18 +115,26 @@ def encode_suffix(suffix):
         suffix = suffix[:-1]
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
-def get_file_info_data_exact(version):
-    """Fetches exact version without fallback."""
-    if version in FILE_INFO_CACHE:
-        return FILE_INFO_CACHE[version]
+def get_file_info_data_exact(version, custom_base=None):
+    """Fetches exact version with custom_base or domains search."""
+    cache_key = f"{version}:{custom_base}" if custom_base else version
+    if cache_key in FILE_INFO_CACHE:
+        return FILE_INFO_CACHE[cache_key]
         
-    for base in DOMAINS:
+    search_domains = [custom_base] if custom_base else DOMAINS
+    if custom_base and custom_base not in DOMAINS:
+        search_domains.append(BASE_URL)
+        search_domains.append(FALLBACK_BASE_URL)
+        
+    for base in search_domains:
         url = f"{base}{version}/fileinfo"
         try:
             res = http_session.get(url, timeout=4)
             if res.status_code == 200:
                 val = (res.text, version, base)
-                FILE_INFO_CACHE[version] = val
+                FILE_INFO_CACHE[cache_key] = val
+                if version not in FILE_INFO_CACHE:
+                    FILE_INFO_CACHE[version] = val
                 return val
         except Exception:
             pass
@@ -374,7 +382,7 @@ def extract_new_game_items(active_version, new_text):
     return grouped_items
 
 def check_name_similarity(name1, name2):
-    """Normalized token alignment index mapping mesh names with texture assets safely."""
+    """Fuzzy word-level token matcher for Unity assets."""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
     n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
     
@@ -435,12 +443,27 @@ def extract_version_from_input(input_str):
         return match_fallback.group(1)
     return None
 
+def extract_base_url_and_version(input_str):
+    """Extracts both the base URL and the version from an input string if it is a URL."""
+    if not input_str:
+        return None, None
+        
+    input_str = input_str.strip()
+    url_pattern = r'(https?://[^/]+/live/ABHotUpdates/android/)(\d+\.\d+\.\d+)'
+    match = re.search(url_pattern, input_str, re.IGNORECASE)
+    if match:
+        base_url = match.group(1)
+        version = match.group(2)
+        return base_url, version
+        
+    version = extract_version_from_input(input_str)
+    return None, version
+
 def extract_theme_keywords(file_entries):
     """Parses file paths and isolates relevant theme/event suffix patterns (e.g. sf49, pony49)."""
     keywords = set()
     for fid, _, _ in file_entries:
         name = fid.split('/')[-1].lower()
-        # Captures visual themes like sf49, rank43, pony49, etc.
         matches = re.findall(r'[a-z]+_?[a-z]*\d+', name)
         for m in matches:
             if not m.isdigit():
@@ -544,9 +567,9 @@ def compile_visual_assets_bundle(version, file_entries, base_url):
     zip_io.seek(0)
     return zip_io.getvalue()
 
-def trigger_background_asset_delivery(chat_id, version, file_entries):
+def trigger_background_asset_delivery(chat_id, version, file_entries, custom_base=None):
     """Compiles and delivers new item icon and composite visual ZIP packs directly to Telegram."""
-    new_text, _, base_url = get_file_info_data_exact(version)
+    new_text, _, base_url = get_file_info_data_exact(version, custom_base)
     if not new_text or not base_url:
         return
         
@@ -567,9 +590,9 @@ def trigger_background_asset_delivery(chat_id, version, file_entries):
         send_message(chat_id, "📥 Grouping visual assets (meshes & textures)...")
         send_extracted_document_to_chat(chat_id, visuals_zip, f"Visual_Assets_Pack_{version}.zip")
 
-def run_miniupdate_extraction_details(version):
+def run_miniupdate_extraction_details(version, custom_base=None):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
-    new_text, active_version, base_url = get_file_info_data_exact(version)
+    new_text, active_version, base_url = get_file_info_data_exact(version, custom_base)
     if not new_text:
         return f"❌ Version <b>{version}</b> not found.", None, {}
 
@@ -622,6 +645,14 @@ def run_miniupdate_extraction_details(version):
 
     size_mb = round(total_size / (1024 * 1024), 2)
     
+    simple_file_list = [{"fileName": entry[0]} for entry in file_entries]
+    new_items = []
+    try:
+        new_items = extract_new_game_items(version, new_text)
+    except Exception: pass
+    
+    analysis = analyze_update_purpose(simple_file_list, new_items)
+
     msg = [
         "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
         "│",
@@ -632,7 +663,7 @@ def run_miniupdate_extraction_details(version):
         "│"
     ]
 
-    # Active Suffix theme patterns
+    # Suffix theme patterns
     themes = extract_theme_keywords(file_entries)
     if themes:
         msg.append("├ 🏷️ DETECTED THEMES:")
@@ -651,17 +682,12 @@ def run_miniupdate_extraction_details(version):
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
-        # Segment filename and sizes across two lines for structured alignment
+        # Segment filename and sizes across two lines
         msg.append(f"│ ▫️ {idx:02d}. {clean_fid_escaped}  ")
         msg.append(f"│             ({stat}, {sz_display})")
         
     if len(file_entries) > max_visible_files:
         msg.append(f"│ ▫️ ... and {len(file_entries) - max_visible_files} more files.")
-
-    new_items = []
-    try:
-        new_items = extract_new_game_items(version, new_text)
-    except Exception: pass
 
     if new_items:
         msg.append("│")
@@ -1448,7 +1474,8 @@ def handle_bot_webhook():
                     
                     # Automatically compile and deliver item icons & visual asset bundles
                     trigger_background_asset_delivery(chat_id, ver, file_entries)
-                except Exception:
+                except Exception as e:
+                    print(f"Callback query extraction error: {e}")
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
@@ -1675,12 +1702,12 @@ def handle_bot_webhook():
             raw_text = msg.get("text", "").strip()
 
             # Dynamic link checks containing Android version or fileinfo link formats
-            version = extract_version_from_input(raw_text)
+            custom_base, version = extract_base_url_and_version(raw_text)
             if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "LIVE LINK DETECTED" in raw_text):
                 sent_msg = send_message(chat_id, f"⏳ <b>Comparative Scan Auto-Triggered:</b> Analyzing miniupdate version <b>{version}</b>...", parse_mode="HTML")
                 
                 try:
-                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(version)
+                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(version, custom_base)
                     keyboard = []
                     if file_entries:
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{version}"}])
@@ -1699,7 +1726,7 @@ def handle_bot_webhook():
                         http_session.post(url, json=payload, timeout=10)
                         
                         # Automatically compile and deliver item icons & visual asset bundles
-                        trigger_background_asset_delivery(chat_id, version, file_entries)
+                        trigger_background_asset_delivery(chat_id, version, file_entries, custom_base)
                     else:
                         send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="HTML")
                 except Exception as e:
@@ -1729,7 +1756,7 @@ def handle_bot_webhook():
                     send_message(chat_id, "╭─❌ USAGE\n╰─/check [version / fileinfo URL]\n\nExample: /check 1.128.9")
                     return jsonify({"status": "ok"}), 200
                 ver_input = parts[1].strip()
-                ver = extract_version_from_input(ver_input)
+                custom_base, ver = extract_base_url_and_version(ver_input)
                 if not ver:
                     send_message(chat_id, "❌ Unable to extract a valid patch version string from the input.")
                     return jsonify({"status": "ok"}), 200
@@ -1742,7 +1769,7 @@ def handle_bot_webhook():
                 sent_msg_id = sent_msg["result"]["message_id"]
                 
                 try:
-                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
+                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver, custom_base)
                     keyboard = []
                     if file_entries:
                         # Modified version summary layout contains only the Extract All as ZIP button
@@ -1761,8 +1788,9 @@ def handle_bot_webhook():
                     http_session.post(url, json=payload, timeout=10)
                     
                     # Automatically compile and deliver item icons & visual asset bundles
-                    trigger_background_asset_delivery(chat_id, ver, file_entries)
-                except Exception:
+                    trigger_background_asset_delivery(chat_id, ver, file_entries, custom_base)
+                except Exception as e:
+                    print(f"Manual scan execution error: {e}")
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
@@ -1826,7 +1854,7 @@ def handle_bot_webhook():
                     else:
                         send_message(chat_id, "❌ Replying message does not contain a file document attachment.")
                 else:
-                    send_message(chat_id, "❌ Reply to any asset file document in the group with '/extract'.")
+                    send_message(chat_id, "╭─❌ USAGE\n╰─Reply to any asset file document in the group with '/extract'.")
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
