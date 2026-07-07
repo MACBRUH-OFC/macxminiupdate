@@ -555,9 +555,9 @@ function renderList() {
         const row = document.createElement('div');
         row.className = "flex flex-col rounded-xl bg-[#0b0b0f] border border-zinc-900 overflow-hidden min-w-0 mb-1";
 
-        let badgeColor = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+        let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
         if (item.status === "Modified") {
-            badgeColor = "bg-amber-500/10 text-amber-400 border border-emerald-500/20";
+            badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
         }
 
         row.innerHTML = `
@@ -731,6 +731,21 @@ function selectCompositeAsset(compString, element) {
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function decodeTextSafe(arrayBuffer) {
+    try {
+        const decoder = new TextDecoder('utf-8');
+        return decoder.decode(arrayBuffer);
+    } catch(e) {
+        // Fallback ASCII decoding
+        const arr = new Uint8Array(arrayBuffer);
+        let raw = '';
+        for (let i = 0; i < arr.byteLength; i++) {
+            raw += String.fromCharCode(arr[i]);
+        }
+        return raw;
+    }
+}
+
 function previewCategoryFolder(index, key) {
     cleanPreviousMediaTracks();
     currentPreviewRequestId++;
@@ -783,7 +798,7 @@ function previewCategoryFolder(index, key) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
+                    <canvas id="babylonCategoryCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
         
@@ -793,7 +808,7 @@ function previewCategoryFolder(index, key) {
             url: m.url,
             associated_textures: m.associated_textures || []
         }));
-        initBabylonMeshScene("babylonAssetCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
+        initBabylonMeshScene("babylonCategoryCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
     }
     else if (key === 'configs') {
         document.getElementById('mediaTitle').innerText = "Configurations Registry Matrix";
@@ -896,7 +911,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             `;
             extractedData.composites.forEach(comp => {
                 sublistHtml += `
-                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left select-none" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
+                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
                         <div class="flex items-center justify-between">
                             <span class="text-[10px] font-bold text-yellow-500 truncate"><i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>${comp.name}</span>
                             <span class="text-[8px] px-1.5 py-0.2 rounded border border-yellow-500/20 bg-yellow-500/5 text-yellow-400 uppercase tracking-wider font-mono">Assembly Ready</span>
@@ -1144,24 +1159,6 @@ function renderStructuredJSON(jsonObj, ext, label, item) {
         </div>`;
 }
 
-window.triggerDirectSiblingPreview = function(encodedUrl, encodedName, encodedLabel, encodedTextures, encodedParts) {
-    const url = decodeURIComponent(encodedUrl);
-    const name = decodeURIComponent(encodedName);
-    const label = decodeURIComponent(encodedLabel);
-    const textures = JSON.parse(decodeURIComponent(encodedTextures));
-    const parts = JSON.parse(decodeURIComponent(encodedParts));
-
-    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
-
-    selectFile({
-        id: url,
-        name: name,
-        label: label,
-        associatedTextures: textures,
-        compositeParts: parts
-    }, null);
-};
-
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
@@ -1191,10 +1188,12 @@ async function selectFile(item, element) {
 
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite');
-    const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video');
-    const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio');
-    const isBinary = ['bin','bytes','dat','bundle','so','dll','apk','assets','db'].includes(ext) || lLabel.includes('binary') || lLabel.includes('bytes');
+    // Multi-criteria checking: matches both filename extensions and metadata labels
+    const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite') || lLabel.includes('texture2d') || lLabel.includes('image');
+    const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video') || lLabel.includes('videoclip');
+    const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio') || lLabel.includes('audioclip');
+    const isBinary = ['bin','bytes','dat','bundle','so','dll','apk','assets','db'].includes(ext) || lLabel.includes('binary') || lLabel.includes('bytes') || lLabel.includes('meshfilter') || lLabel.includes('transform');
+    const isText = ['txt','json','xml','manifest','yaml','csv','atlas'].includes(ext) || lLabel.includes('text') || lLabel.includes('json') || lLabel.includes('textasset') || lLabel.includes('monobehaviour') || lLabel.includes('scriptableobject');
 
     if (requestId !== currentPreviewRequestId) return;
 
@@ -1275,7 +1274,7 @@ async function selectFile(item, element) {
                 </div>`;
             initCustomAudioController();
         } 
-        else if (isBinary) {
+        else if (isBinary && !isText) {
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
@@ -1307,12 +1306,19 @@ async function selectFile(item, element) {
                 let parsedJson = null;
 
                 if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
-                    const parts = liveSourceData.split(',');
-                    processedTextString = atob(parts[1]);
+                    const parts = liveSourceData.split('base64,');
+                    const binaryString = window.atob(parts[1]);
+                    const len = binaryString.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    processedTextString = decodeTextSafe(bytes.buffer);
                 } else {
                     const rawTextResponse = await fetch(liveSourceData);
                     if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
-                    processedTextString = await rawTextResponse.text();
+                    const arrayBuffer = await rawTextResponse.arrayBuffer();
+                    processedTextString = decodeTextSafe(arrayBuffer);
                 }
 
                 if (requestId !== currentPreviewRequestId) return;

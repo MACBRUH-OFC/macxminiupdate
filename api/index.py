@@ -43,7 +43,7 @@ MEMORY_ASSET_CACHE = {}
 BOT_TEMP_MAPPINGS = {}
 PURGED_LEGACY_DB = False
 
-# List of allowed user IDs permitted in private chats (Owner is natively allowed)
+# List of allowed user IDs permitted in private chats
 ALLOWED_USERS = [OWNER_ID]
 
 def get_mime_type(filename):
@@ -71,8 +71,10 @@ def encode_token(remote_url, filename, content_type, content_bytes=None):
         "content_type": content_type,
         "cache_key": cache_key
     }
-    if content_bytes and len(content_bytes) < 2048:
-        data["content_b64"] = base64.b64encode(content_bytes).decode('utf-8')
+    if content_bytes:
+        # If there's no real web URL, embed the content bytes regardless of size
+        if len(content_bytes) < 2048 or "local-placeholder" in remote_url:
+            data["content_b64"] = base64.b64encode(content_bytes).decode('utf-8')
     json_bytes = json.dumps(data).encode('utf-8')
     compressed = zlib.compress(json_bytes)
     return base64.urlsafe_b64encode(compressed).decode('utf-8')
@@ -116,7 +118,6 @@ def encode_suffix(suffix):
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
 def get_file_info_data_exact(version):
-    """Fetches exact version without fallback."""
     if version in FILE_INFO_CACHE:
         return FILE_INFO_CACHE[version]
         
@@ -133,7 +134,6 @@ def get_file_info_data_exact(version):
     return None, None, None
 
 def get_file_info_data(version):
-    """Primary fetch routine."""
     return get_file_info_data_exact(version)
 
 def get_multiple_file_info_data(versions):
@@ -165,7 +165,6 @@ def get_multiple_file_info_data(versions):
     return results
 
 def find_latest_active_version(requested_version):
-    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
     candidates = [requested_version]
     for step in [1, 2, 3]:
         nxt = get_next_version(requested_version, step)
@@ -424,7 +423,7 @@ def find_references_in_json(obj, asset_names):
     return referenced
 
 def extract_version_from_input(input_str):
-    """Fuzzy regex matching system extracting clean target versions or fileinfo URLs."""
+    """Robust regex matching system extracting clean target versions or fileinfo URLs."""
     if not input_str:
         return None
     match = re.search(r'(?:/android/|android/|^)(\d+\.\d+\.\d+)', input_str.strip())
@@ -502,6 +501,32 @@ def analyze_update_purpose(files, new_items):
         "highlights": highlights,
         "severity": "Visual Content" if "3D Visual Models" in categories else "System Synced"
     }
+
+def detect_dynamic_themes(file_entries):
+    """Scans file lists dynamically to identify thematic codes/tags without reliance on hardcoded keyword lists."""
+    from collections import Counter
+    token_counts = Counter()
+    
+    generic_words = {
+        "gameassetbundles", "sound", "voice", "en", "audio", "vfx", "weapon", "assembly", "config", "patch",
+        "extracted", "mesh", "tex", "texture", "material", "animator", "controller", "prefab", "other",
+        "containers", "geometry", "skinnedmeshrenderer", "meshrenderer", "transform", "resconf",
+        "resconfhotupdate", "matchreviewparam", "patchoptionalresmanager", "uidrawshop", "unlimited", "cardpool"
+    }
+    
+    for fid, _, _ in file_entries:
+        basename = fid.split('/')[-1]
+        parts = re.split(r'[\W_]+', basename)
+        for part in parts:
+            part_lower = part.lower()
+            if len(part_lower) >= 4 and part_lower not in generic_words:
+                token_counts[part_lower] += 1
+                
+    detected = []
+    for tag, count in token_counts.most_common(5):
+        if count >= 2 or any(char.isdigit() for char in tag):
+            detected.append((tag, count))
+    return detected
 
 def latest_version_logic():
     try:
@@ -629,7 +654,6 @@ def handle_extractor_response(response):
     if not isinstance(assets_list, list):
         assets_list = []
     
-    # Process structured metadata files safely first
     processed_assets = []
     for asset in assets_list:
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
@@ -1125,13 +1149,9 @@ def is_user_allowed(user_id):
     return False
 
 def is_action_permitted(chat_id, user_id):
-    """Checks if the user has permission to interact with the bot."""
-    if user_id == OWNER_ID:
-        return True
-    if str(chat_id) == GROUP_ID:
-        return True
-    if is_user_allowed(user_id):
-        return True
+    if user_id == OWNER_ID: return True
+    if str(chat_id) == GROUP_ID: return True
+    if is_user_allowed(user_id): return True
     return False
 
 def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
@@ -1175,9 +1195,8 @@ def remove_pending_request(user_id):
     write_db_to_chat(OWNER_ID, db)
 
 def send_item_icons_to_chat(chat_id, new_items):
-    """Downloads newly detected item icons from CDN link and delivers them directly as photos."""
-    # Limit to 3 files to prevent Telegram rate limit issues
-    for item in new_items[:3]:
+    """Downloads all newly parsed item icons and delivers them directly as cleanly formatted Telegram photo messages."""
+    for item in new_items:
         item_id = item.get("id")
         item_name = item.get("name", "Unknown Item")
         icon_url = item.get("icon_url")
@@ -1190,12 +1209,12 @@ def send_item_icons_to_chat(chat_id, new_items):
                 files = {"photo": (f"{item_id}.png", res.content, "image/png")}
                 payload = {
                     "chat_id": chat_id,
-                    "caption": f"✨ New Item Discovered: <b>{item_name}</b>\nID: <code>{item_id}</code>",
+                    "caption": f"✨ New Item: <b>{item_name}</b>\nID: <code>{item_id}</code>",
                     "parse_mode": "HTML"
                 }
                 http_session.post(url, data=payload, files=files, timeout=15)
         except Exception as e:
-            print(f"Failed delivering icon file for {item_id}: {e}")
+            print(f"Error sending item icon for {item_id}: {e}")
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -1230,9 +1249,6 @@ def run_miniupdate_extraction_details(version):
     new_files_count = 0
     changed_files_count = 0
 
-    themes_count = {}
-    allowed_tags = ["sf49", "rank43", "pony49", "eightinf49", "hype44", "aug_ninth", "wolf_sheep", "uidrawshop"]
-
     for line in new_text.splitlines():
         if not line.strip(): continue
         parts = line.split(',')
@@ -1254,10 +1270,6 @@ def run_miniupdate_extraction_details(version):
             
         if status:
             file_entries.append((file_id, status, size))
-            file_lower = file_id.lower()
-            for tag in allowed_tags:
-                if tag in file_lower:
-                    themes_count[tag] = themes_count.get(tag, 0) + 1
 
     size_mb = round(total_size / (1024 * 1024), 2)
     
@@ -1268,7 +1280,19 @@ def run_miniupdate_extraction_details(version):
     except Exception: pass
     
     analysis = analyze_update_purpose(simple_file_list, new_items)
-    
+
+    # Dynamic thematic scanning logic
+    themes = detect_dynamic_themes(file_entries)
+
+    # Category classifications for the bot
+    categories = {"obj": 0, "png": 0, "json": 0, "other": 0}
+    for fid, stat, sz in file_entries:
+        l_fid = fid.lower()
+        if l_fid.endswith(".obj"): categories["obj"] += 1
+        elif any(l_fid.endswith(ext) for ext in [".png", ".jpg", ".jpeg"]): categories["png"] += 1
+        elif l_fid.endswith(".json"): categories["json"] += 1
+        else: categories["other"] += 1
+
     msg = [
         "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
         "│",
@@ -1281,12 +1305,21 @@ def run_miniupdate_extraction_details(version):
         f"│ <code>{analysis['summary']}</code>",
         "│"
     ]
-    
-    if themes_count:
+
+    if themes:
         msg.append("├ 🏷️ THEMATIC THEMES DETECTED:")
-        for tag, count in sorted(themes_count.items(), key=lambda x: x[1], reverse=True)[:5]:
+        for tag, count in themes:
             msg.append(f"│ • Tag <b>#{tag.upper()}</b>: {count} matches")
         msg.append("│")
+
+    # Grouped files category overview for Telegram
+    msg.append("├ 📁 CATEGORIES:")
+    msg.append("<blockquote>")
+    if categories["obj"] > 0: msg.append(f"📦 <b>Geometry & 3D Meshes:</b> {categories['obj']} meshes")
+    if categories["png"] > 0: msg.append(f"🎨 <b>Textures & Sprite Assets:</b> {categories['png']} sprites")
+    if categories["json"] > 0: msg.append(f"⚙️ <b>MonoBehaviour & GameData:</b> {categories['json']} configs")
+    if categories["other"] > 0: msg.append(f"📝 <b>Other Resources:</b> {categories['other']} files")
+    msg.append("</blockquote>")
 
     msg.append("├ 📂 DISCOVERED FILES:")
     msg.append("<blockquote>")
@@ -1301,10 +1334,10 @@ def run_miniupdate_extraction_details(version):
         clean_fid = fid.split('/')[-1]
         clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
-        msg.append(f"      <i>({stat}, {sz_display})</i>")
+        msg.append(f"            <i>({stat}, {sz_display})</i>")
         
     if len(file_entries) > max_visible_files:
-        msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
+        msg.append(f"▫️ ... and {len(file_entries) - max_visible_files} more files.")
     msg.append("</blockquote>")
 
     if new_items:
@@ -1357,7 +1390,6 @@ def run_miniupdate_extraction_details(version):
                 "mesh_assets": comp_meshes,
                 "texture_assets": comp_textures
             }
-            # Attach keyboard actions directly
             file_keyboard_mappings[m_basename] = f"zip_comp_{comp_id}"
             
     return "\n".join(msg), file_entries, file_keyboard_mappings
@@ -1413,7 +1445,6 @@ def delete_message(chat_id, message_id):
 @app.route('/webhook', methods=['GET', 'POST'])
 def telegram_webhook():
     if request.method == 'GET':
-        # Dynamic GET diagnostic and webhook registration on Vercel
         try:
             host = request.headers.get('Host')
             protocol = "https" if "localhost" not in host else "http"
@@ -1466,7 +1497,6 @@ def handle_all_requests(path):
     elif action == 'stream':
         return stream_cache_logic(request.args.get('token'))
 
-    # Serve webpage index file statically
     if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
         try:
             for filename in ['api/index.html', 'public/index.html', 'index.html']:
@@ -1494,12 +1524,10 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
-            # Secure action bypass for allowed group chat
             if not is_action_permitted(chat_id, user_id):
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
@@ -1511,7 +1539,6 @@ def handle_bot_webhook():
                 first_name = cb_user.get("first_name", "Unknown")
                 username = cb_user.get("username", "None")
                 
-                # Manual request authorization prompting Owner's Personal Chat
                 http_session.post(f"{TELEGRAM_API}/sendMessage", json={
                     "chat_id": OWNER_ID,
                     "text": (
@@ -1529,7 +1556,6 @@ def handle_bot_webhook():
                     }
                 }, timeout=10)
                 
-                # Edit requester's button feedback state
                 http_session.post(f"{TELEGRAM_API}/editMessageText", json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
@@ -1561,7 +1587,6 @@ def handle_bot_webhook():
                 ver = data.replace("check_ver_", "").replace("back_ver_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
-                # Show dynamic in-progress tracking state in-place
                 url = f"{TELEGRAM_API}/editMessageText"
                 http_session.post(url, json={
                     "chat_id": chat_id,
@@ -1574,7 +1599,6 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     
-                    # Group model-textures Zip action button directly
                     for fname, action_data in file_keyboard_mappings.items():
                         if action_data.startswith("zip_comp_"):
                             comp_id = action_data.replace("zip_comp_", "")
@@ -1594,7 +1618,6 @@ def handle_bot_webhook():
                         "reply_markup": {"inline_keyboard": keyboard}
                     }, timeout=10)
 
-                    # Trigger dynamic delivery of discovered item icons if item details present
                     new_items = extract_new_game_items(ver, get_file_info_data_exact(ver)[0])
                     if new_items:
                         send_item_icons_to_chat(chat_id, new_items)
@@ -1672,7 +1695,6 @@ def handle_bot_webhook():
                                     files_added += 1
                                     
                     if files_added > 0:
-                        zip_io.seek(0)
                         send_extracted_document_to_chat(chat_id, zip_io.getvalue(), f"{comp_name}_Combined_Asset.zip")
                     else:
                         send_message(chat_id, "❌ Composite zip generation failed.")
@@ -1689,7 +1711,6 @@ def handle_bot_webhook():
                     target_url = meta.get("url")
                     ver = meta.get("version", "1.126.6")
                     
-                    # Update message to show "Extracting" progress state
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
@@ -1801,7 +1822,6 @@ def handle_bot_webhook():
                         sf = sub_files[idx]
                         fname = sf.get("name") or sf.get("fileName")
                         
-                        # Edit current inline menu to show "Extracting" status
                         url = f"{TELEGRAM_API}/editMessageText"
                         http_session.post(url, json={
                             "chat_id": chat_id,
@@ -1813,10 +1833,8 @@ def handle_bot_webhook():
                         b64 = sf.get("data", "")
                         if b64:
                             file_bytes = base64.b64decode(b64)
-                            # Deliver extracted raw document to Telegram
                             send_extracted_document_to_chat(chat_id, file_bytes, fname)
                             
-                            # Auto-clean active markup buttons (as requested)
                             keyboard = [[{"text": "⬅️ Back to Files List", "callback_data": f"ext_spec_{mapping_id}"}]]
                             url = f"{TELEGRAM_API}/editMessageText"
                             http_session.post(url, json={
@@ -1884,7 +1902,7 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
+            # Dynamic link check containing Android version or fileinfo link formats
             version = extract_version_from_input(raw_text)
             if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "🟢 live link detected" in raw_text.lower()):
                 keyboard = [[{"text": f"🔍 Check Miniupdate {version}", "callback_data": f"check_ver_{version}"}]]
