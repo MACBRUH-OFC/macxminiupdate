@@ -230,8 +230,8 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
 
             <!-- Enhanced Active Tabs Row -->
             <div class="tab-row mb-3 hidden" id="packageTabs">
-                <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>FILES ( <span id="filesCountTab">0</span> )</div>
-                <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>NEW ITEMS ( <span id="itemsCountTab">0</span> )</div>
+                <button class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>FILES ( <span id="filesCountTab">0</span> )</button>
+                <button class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>NEW ITEMS ( <span id="itemsCountTab">0</span> )</button>
             </div>
 
             <div class="scrollable-content-box flex-1 flex flex-col">
@@ -334,7 +334,7 @@ pipelineTabs.addEventListener("click", (e) => {
     }
 });
 
-// Solves the switching issue by explicitly forcing display states on click
+// Explicit exclusive lists toggler
 packageTabs.addEventListener("click", (e) => {
     const target = e.target.closest(".tab-btn");
     if (!target) return;
@@ -486,7 +486,6 @@ extractBtn.onclick = async () => {
             itemList.classList.add('hidden');
         } else {
             document.getElementById("packageTabs").classList.remove("hidden");
-            // Solves toggle override issues by explicitly calling standard CSS actions
             if (activePackageTab === "files") {
                 fileList.classList.remove('hidden');
                 itemList.classList.add('hidden');
@@ -717,7 +716,6 @@ function selectCompositeAsset(compString, element) {
     document.getElementById('mediaTitle').innerText = comp.name;
     document.getElementById('mediaTypeLabel').innerText = comp.type;
 
-    // Apply visual relation indicator mapping info
     const relationBox = document.getElementById('meshRelationBox');
     const descText = document.getElementById('meshRelationDesc');
     descText.innerText = comp.preview_summary;
@@ -740,7 +738,6 @@ function decodeTextSafe(arrayBuffer) {
         const decoder = new TextDecoder('utf-8');
         return decoder.decode(arrayBuffer);
     } catch(e) {
-        // Fallback ASCII decoding
         const arr = new Uint8Array(arrayBuffer);
         let raw = '';
         for (let i = 0; i < arr.byteLength; i++) {
@@ -1099,6 +1096,10 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
                         <span class="truncate pr-2 text-zinc-400 font-mono text-[9px] hover:text-[#ffde00] flex items-center gap-2">
                             <i class="fa-solid ${getIcon(rawType, displayName)} opacity-60"></i> ${displayName}
                         </span>
+                        <div class="flex items-center gap-1.5 flex-shrink-0">
+                            <span class="text-[7px] text-zinc-600 font-mono bg-black px-1.5 py-0.5 rounded border border-zinc-950">${computeByteScale(asset.size || 0)}</span>
+                            <span class="text-[7px] px-1 py-0.2 rounded border uppercase font-black bg-zinc-900/50 text-zinc-500 border-zinc-800">${rawType.replace('application/', '').replace('text/', '').toUpperCase()}</span>
+                        </div>
                     </div>
                 `;
             });
@@ -1335,10 +1336,9 @@ async function selectFile(item, element) {
 
             if (requestId !== currentPreviewRequestId) return;
 
-            // Stop loop routing fallback HTML documents from loading
             const sanitizedCheck = processedTextString.trim().toLowerCase();
             if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
-                throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset data.");
+                throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset file data.");
             }
 
             try {
@@ -1419,7 +1419,7 @@ function cleanPreviousMediaTracks() {
         audioCtx = null; 
     }
     if (babylonEngine) { 
-        window.removeEventListener("resize", resizeBabViewportMatrix); 
+        window.removeEventListener("resize", resizeBabylonViewportMatrix); 
         try { babylonEngine.dispose(); } catch(e){}
         babylonEngine = null; 
     }

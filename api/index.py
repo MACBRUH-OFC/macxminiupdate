@@ -43,7 +43,7 @@ MEMORY_ASSET_CACHE = {}
 BOT_TEMP_MAPPINGS = {}
 PURGED_LEGACY_DB = False
 
-# List of allowed user IDs permitted in private chats (Owner is natively allowed)
+# List of allowed user IDs permitted in private chats
 ALLOWED_USERS = [OWNER_ID]
 
 def get_mime_type(filename):
@@ -120,7 +120,6 @@ def encode_suffix(suffix):
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
 def get_file_info_data_exact(version):
-    """Fetches exact version without fallback."""
     if version in FILE_INFO_CACHE:
         return FILE_INFO_CACHE[version]
         
@@ -137,7 +136,6 @@ def get_file_info_data_exact(version):
     return None, None, None
 
 def get_file_info_data(version):
-    """Primary fetch routine."""
     return get_file_info_data_exact(version)
 
 def get_multiple_file_info_data(versions):
@@ -169,7 +167,6 @@ def get_multiple_file_info_data(versions):
     return results
 
 def find_latest_active_version(requested_version):
-    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
     candidates = [requested_version]
     for step in [1, 2, 3]:
         nxt = get_next_version(requested_version, step)
@@ -685,7 +682,7 @@ def handle_extractor_response(response, bundle_url=None):
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
 
-        # Embedded original source bundle reference to allow stateless retrieval fallbacks
+        # Attaches original source bundle context to keep stateless streaming token small
         local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes, bundle_url=bundle_url)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
@@ -702,6 +699,7 @@ def handle_extractor_response(response, bundle_url=None):
         asset["url"] = local_proxy_route
         asset["fileName"] = filename_str
         asset["label"] = detected_content_type
+        asset["size"] = len(file_bytes)  # Evaluates and populates precise file lengths
         processed_assets.append(asset)
 
     # Separate assets by visual groups to scan data reference connections
@@ -929,7 +927,7 @@ def stream_cache_logic(token):
                     
                     file_bytes = b""
                     if structured_data is not None:
-                        file_bytes = json.dumps(structured_data, indent=2, ensure_ascii=False)
+                        file_bytes = json.dumps(structured_data, indent=2, ensure_ascii=False).encode('utf-8')
                     else:
                         raw_val = sf.get("data", "")
                         if isinstance(raw_val, str) and raw_val:
@@ -1231,7 +1229,7 @@ def remove_pending_request(user_id):
     write_db_to_chat(OWNER_ID, db)
 
 def send_item_icons_to_chat(chat_id, new_items):
-    """Generates and delivers lightweight text-only inline image hyperlinked elements for high-speed Telegram presentation."""
+    """Downloads all newly parsed item icons and delivers them directly as cleanly formatted Telegram text messages with inline image link preview cards."""
     for item in new_items:
         item_id = item.get("id")
         item_name = item.get("name", "Unknown Item")
@@ -1239,21 +1237,21 @@ def send_item_icons_to_chat(chat_id, new_items):
         if not item_id or not icon_url:
             continue
         try:
-            # Inline hyperlinked monospaced layout (without the '✨ New Item:' prefix)
+            # High-fidelity, emoji-free structured visual representation block
             text_payload = (
-                f"✨ <b>{item_name}</b>\n"
-                f"🆔 ID: <a href=\"{icon_url}\"><code>{item_id}</code></a>"
+                f"<b>{item_name}</b>\n"
+                f"ID: <a href=\"{icon_url}\">{item_id}</a>"
             )
             url = f"{TELEGRAM_API}/sendMessage"
             payload = {
                 "chat_id": chat_id,
                 "text": text_payload,
                 "parse_mode": "HTML",
-                "disable_web_page_preview": False  # Must be False so Telegram renders the icon_url preview automatically
+                "disable_web_page_preview": False  # Crucial: Must be False so Telegram displays the embedded icon as an inline layout preview
             }
             http_session.post(url, json=payload, timeout=10)
         except Exception as e:
-            print(f"Error loading Telegram inline preview text for item {item_id}: {e}")
+            print(f"Error sending item connection to Telegram chat: {e}")
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -1376,14 +1374,16 @@ def run_miniupdate_extraction_details(version):
         msg.append("<blockquote>")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
-            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
+            # EmbedsCDN link in active summary text block
+            msg.append(f"▫️ <b>{clean_name}</b>")
+            msg.append(f"      ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
         if len(new_items) > 12:
             msg.append(f"... and {len(new_items) - 12} more items.")
         msg.append("</blockquote>")
 
     msg.append("╰──────────────────────")
     
+    # Compile composite mesh-texture connections on the fly for zip buttons
     file_keyboard_mappings = {}
     meshes = [f[0] for f in file_entries if f[0].lower().endswith(".obj")]
     textures = [f[0] for f in file_entries if any(f[0].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg"])]
@@ -1674,7 +1674,7 @@ def handle_bot_webhook():
 
             elif data.startswith("zip_comp_"):
                 comp_id = data.replace("zip_comp_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Generating combined zip..."}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(comp_id)
                 if meta:
