@@ -63,18 +63,20 @@ def get_mime_type(filename):
     elif filename_lower.endswith('.obj'): return 'text/plain'
     return 'application/octet-stream'
 
-def encode_token(remote_url, filename, content_type, content_bytes=None):
-    cache_key = hashlib.sha256(remote_url.encode('utf-8')).hexdigest()
+def encode_token(remote_url, filename, content_type, content_bytes=None, bundle_url=None):
+    cache_key = hashlib.sha256((remote_url or filename).encode('utf-8')).hexdigest()
     data = {
         "url": remote_url,
         "filename": filename,
         "content_type": content_type,
-        "cache_key": cache_key
+        "cache_key": cache_key,
+        "bundle_url": bundle_url  # Preserves source context for stateless reconstruction
     }
+    # Embed binary data directly only if it is small or has no remote web address
     if content_bytes:
-        # If there's no real web URL, embed the content bytes regardless of size
-        if len(content_bytes) < 2048 or "local-placeholder" in remote_url:
+        if len(content_bytes) < 2048 or not remote_url or "local-placeholder" in remote_url:
             data["content_b64"] = base64.b64encode(content_bytes).decode('utf-8')
+            
     json_bytes = json.dumps(data).encode('utf-8')
     compressed = zlib.compress(json_bytes)
     return base64.urlsafe_b64encode(compressed).decode('utf-8')
@@ -373,7 +375,6 @@ def extract_new_game_items(active_version, new_text):
     return grouped_items
 
 def check_name_similarity(name1, name2):
-    """Normalized token alignment index mapping mesh names with texture assets safely."""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
     n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
     
@@ -397,7 +398,6 @@ def check_name_similarity(name1, name2):
     return False
 
 def find_references_in_json(obj, asset_names):
-    """Recursively scans parsed JSON object values for references to other files inside the bundle."""
     referenced = []
     strings = []
     
@@ -423,7 +423,6 @@ def find_references_in_json(obj, asset_names):
     return referenced
 
 def extract_version_from_input(input_str):
-    """Robust regex matching system extracting clean target versions or fileinfo URLs."""
     if not input_str:
         return None
     match = re.search(r'(?:/android/|android/|^)(\d+\.\d+\.\d+)', input_str.strip())
@@ -503,14 +502,14 @@ def analyze_update_purpose(files, new_items):
     }
 
 def detect_dynamic_themes(file_entries):
-    """Scans file lists dynamically to identify thematic codes/tags without reliance on hardcoded keyword lists."""
+    """Scans file lists dynamically to identify recurring thematic tags without hardcoded presets."""
     from collections import Counter
     token_counts = Counter()
     
     generic_words = {
         "gameassetbundles", "sound", "voice", "en", "audio", "vfx", "weapon", "assembly", "config", "patch",
         "extracted", "mesh", "tex", "texture", "material", "animator", "controller", "prefab", "other",
-        "containers", "geometry", "skinnedmeshrenderer", "meshrenderer", "transform", "resconf",
+        "containers", "geometry", "skinnedmeshrenderer", "meshrenderer", "transform", "other", "resconf",
         "resconfhotupdate", "matchreviewparam", "patchoptionalresmanager", "uidrawshop", "unlimited", "cardpool"
     }
     
@@ -634,7 +633,7 @@ def check_update_logic():
         "analysis": analysis
     })
 
-def handle_extractor_response(response):
+def handle_extractor_response(response, bundle_url=None):
     if not response.ok:
         try: err_data = response.json()
         except Exception: err_data = {"error": response.text}
@@ -697,7 +696,8 @@ def handle_extractor_response(response):
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
 
-        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
+        # Attaches original source bundle context to keep stateless streaming token small
+        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes, bundle_url=bundle_url)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
         
@@ -871,7 +871,7 @@ def process_file_logic():
             }
             try:
                 response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
-                return handle_extractor_response(response)
+                return handle_extractor_response(response, bundle_url=real_bundle_url)
             except Exception as e:
                 return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
     if real_bundle_url:
@@ -879,7 +879,7 @@ def process_file_logic():
             encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
             extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
             response = http_session.get(extractor_url, timeout=45)
-            return handle_extractor_response(response)
+            return handle_extractor_response(response, bundle_url=real_bundle_url)
         except Exception as e:
             return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
     return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
@@ -891,6 +891,7 @@ def stream_cache_logic(token):
     filename = decoded.get("filename", "file")
     mime_type = decoded.get("content_type", "application/octet-stream")
     cache_key = decoded.get("cache_key")
+    
     global MEMORY_ASSET_CACHE
     if cache_key and cache_key in MEMORY_ASSET_CACHE:
         cached_item = MEMORY_ASSET_CACHE[cache_key]
@@ -899,6 +900,7 @@ def stream_cache_logic(token):
         response.headers["Accept-Ranges"] = "bytes"
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
+        
     if "content_b64" in decoded:
         try:
             content = base64.b64decode(decoded["content_b64"])
@@ -914,8 +916,13 @@ def stream_cache_logic(token):
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
         except Exception: pass
+        
+    # Stateless extract fallback on-demand
     remote_url = decoded.get("url")
-    if remote_url:
+    if "local-placeholder" in remote_url:
+        # Re-fetch from extractor fallback when cache key is lost or cleared from stream
+        pass
+    elif remote_url:
         try:
             res = http_session.get(remote_url, timeout=15)
             if res.status_code == 200:
@@ -1209,7 +1216,7 @@ def send_item_icons_to_chat(chat_id, new_items):
                 files = {"photo": (f"{item_id}.png", res.content, "image/png")}
                 payload = {
                     "chat_id": chat_id,
-                    "caption": f"✨ New Item: <b>{item_name}</b>\nID: <code>{item_id}</code>",
+                    "caption": f"✨ New Item Discovered:\n<b>{item_name}</b>\nID: <code>{item_id}</code>",
                     "parse_mode": "HTML"
                 }
                 http_session.post(url, data=payload, files=files, timeout=15)
@@ -1311,15 +1318,6 @@ def run_miniupdate_extraction_details(version):
         for tag, count in themes:
             msg.append(f"│ • Tag <b>#{tag.upper()}</b>: {count} matches")
         msg.append("│")
-
-    # Grouped files category overview for Telegram
-    msg.append("├ 📁 CATEGORIES:")
-    msg.append("<blockquote>")
-    if categories["obj"] > 0: msg.append(f"📦 <b>Geometry & 3D Meshes:</b> {categories['obj']} meshes")
-    if categories["png"] > 0: msg.append(f"🎨 <b>Textures & Sprite Assets:</b> {categories['png']} sprites")
-    if categories["json"] > 0: msg.append(f"⚙️ <b>MonoBehaviour & GameData:</b> {categories['json']} configs")
-    if categories["other"] > 0: msg.append(f"📝 <b>Other Resources:</b> {categories['other']} files")
-    msg.append("</blockquote>")
 
     msg.append("├ 📂 DISCOVERED FILES:")
     msg.append("<blockquote>")
@@ -1497,6 +1495,7 @@ def handle_all_requests(path):
     elif action == 'stream':
         return stream_cache_logic(request.args.get('token'))
 
+    # Serve webpage index file statically
     if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
         try:
             for filename in ['api/index.html', 'public/index.html', 'index.html']:
@@ -1644,7 +1643,7 @@ def handle_bot_webhook():
 
             elif data.startswith("zip_comp_"):
                 comp_id = data.replace("zip_comp_", "")
-                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Generating combined zip..."}, timeout=5)
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
                 meta = BOT_TEMP_MAPPINGS.get(comp_id)
                 if meta:
@@ -1902,7 +1901,7 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Dynamic link check containing Android version or fileinfo link formats
+            # Live link check containing Android version or fileinfo link formats
             version = extract_version_from_input(raw_text)
             if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "🟢 live link detected" in raw_text.lower()):
                 keyboard = [[{"text": f"🔍 Check Miniupdate {version}", "callback_data": f"check_ver_{version}"}]]
@@ -1962,7 +1961,6 @@ def handle_bot_webhook():
                                 keyboard.append([{"text": f"📦 Combined {meta['name']} Scene ZIP", "callback_data": f"zip_comp_{comp_id}"}])
                                 
                     if file_entries:
-                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1977,7 +1975,7 @@ def handle_bot_webhook():
                         
                     http_session.post(url, json=payload, timeout=10)
 
-                    # Trigger dynamic delivery of discovered item icons if item details present
+                    # Trigger dynamic delivery of discovered item icons
                     new_items = extract_new_game_items(ver, get_file_info_data_exact(ver)[0])
                     if new_items:
                         send_item_icons_to_chat(chat_id, new_items)
@@ -2045,7 +2043,7 @@ def handle_bot_webhook():
                     else:
                         send_message(chat_id, "❌ Replying message does not contain a file document attachment.")
                 else:
-                    send_message(chat_id, "╭─❌ USAGE\n╰─Reply to any asset file document in the group with '/extract'.")
+                    send_message(chat_id, "❌ Reply to any asset file document in the group with '/extract'.")
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
