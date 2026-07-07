@@ -228,9 +228,14 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
             </div>
 
+            <!-- Enhanced Custom Tab Switcher with reliable onclick trigger -->
             <div class="tab-row mb-3 hidden" id="packageTabs">
-                <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)</div>
-                <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)</div>
+                <div id="tabBtnFiles" class="tab-btn active cursor-pointer select-none" onclick="switchPackageTab('files')">
+                    <i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)
+                </div>
+                <div id="tabBtnItems" class="tab-btn cursor-pointer select-none" onclick="switchPackageTab('items')">
+                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)
+                </div>
             </div>
 
             <div class="scrollable-content-box flex-1 flex flex-col">
@@ -302,6 +307,10 @@ let trayDataCache = {}; // Global dictionary mapping accordion index to download
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
 
+// Global Text Workbench UI State Variables
+let originalTextPayloadValue = "";
+let textPreviewContainerIdMaximized = false;
+
 const pipelineTabs = document.getElementById("pipelineTabs");
 const packageTabs = document.getElementById("packageTabs");
 const wrapperAuto = document.getElementById("wrapperAuto");
@@ -333,21 +342,24 @@ pipelineTabs.addEventListener("click", (e) => {
     }
 });
 
-packageTabs.addEventListener("click", (e) => {
-    const target = e.target.closest(".tab-btn");
-    if (!target) return;
-    document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => btn.classList.remove("active"));
-    target.classList.add("active");
-    activePackageTab = target.dataset.tab;
-
-    if(activePackageTab === "files") {
+// Explicit Tab Switching Logic Fix
+window.switchPackageTab = function(tabName) {
+    activePackageTab = tabName;
+    const fileTabBtn = document.getElementById("tabBtnFiles");
+    const itemTabBtn = document.getElementById("tabBtnItems");
+    
+    if (tabName === "files") {
+        fileTabBtn.classList.add("active");
+        itemTabBtn.classList.remove("active");
         fileList.classList.remove("hidden");
         itemList.classList.add("hidden");
     } else {
-        fileList.classList.remove("hidden");
-        itemList.classList.add("hidden");
+        fileTabBtn.classList.remove("active");
+        itemTabBtn.classList.add("active");
+        fileList.classList.add("hidden");
+        itemList.classList.remove("hidden");
     }
-});
+};
 
 async function initSystemMatrix() {
     try {
@@ -414,6 +426,8 @@ function resetOutputWorkspace() {
     currentPreviewRequestId++;
     currentTraySubAssets = [];
     trayDataCache = {};
+    originalTextPayloadValue = "";
+    textPreviewContainerIdMaximized = false;
 
     fileList.innerHTML = "";
     itemList.innerHTML = "";
@@ -476,20 +490,10 @@ extractBtn.onclick = async () => {
         
         if (activeNewItems.length === 0) {
             document.getElementById("packageTabs").classList.add("hidden");
-            document.querySelectorAll("#packageTabs .tab-btn").forEach(btn => {
-                if (btn.dataset.tab === "files") btn.classList.add("active");
-                else btn.classList.remove("active");
-            });
-            activePackageTab = "files";
-            fileList.classList.remove('hidden');
-            itemList.classList.add('hidden');
+            switchPackageTab('files');
         } else {
             document.getElementById("packageTabs").classList.remove("hidden");
-            if (activePackageTab === "files") {
-                fileList.classList.remove('hidden');
-            } else {
-                itemList.classList.remove('hidden');
-            }
+            switchPackageTab('files');
         }
 
         // Render Insight Report if present
@@ -795,7 +799,7 @@ function previewCategoryFolder(index, key) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <canvas id="babylonCategoryCanvas" class="babylon-canvas-viewport"></canvas>
+                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
         
@@ -805,7 +809,7 @@ function previewCategoryFolder(index, key) {
             url: m.url,
             associated_textures: m.associated_textures || []
         }));
-        initBabylonMeshScene("babylonCategoryCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
+        initBabylonMeshScene("babylonAssetCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
     }
     else if (key === 'configs') {
         document.getElementById('mediaTitle').innerText = "Configurations Registry Matrix";
@@ -1043,6 +1047,25 @@ function showFallbackError(errorMessage) {
         </div>`;
 }
 
+// Global visual tab switcher method
+window.switchPackageTab = function(tabName) {
+    activePackageTab = tabName;
+    const fileTabBtn = document.getElementById("tabBtnFiles");
+    const itemTabBtn = document.getElementById("tabBtnItems");
+    
+    if (tabName === "files") {
+        fileTabBtn.classList.add("active");
+        itemTabBtn.classList.remove("active");
+        fileList.classList.remove("hidden");
+        itemList.classList.add("hidden");
+    } else {
+        fileTabBtn.classList.remove("active");
+        itemTabBtn.classList.add("active");
+        fileList.classList.add("hidden");
+        itemList.classList.remove("hidden");
+    }
+};
+
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
@@ -1059,7 +1082,6 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    // Direct proxy link loading (rather than accessing via cached local dictionary keys)
     let liveSourceData = item.id || "";
     const ext = item.name.split('.').pop().toLowerCase();
     const lLabel = item.label.toLowerCase();
