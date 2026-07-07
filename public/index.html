@@ -228,14 +228,10 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
             </div>
 
-            <!-- Enhanced Custom Tab Switcher with reliable onclick trigger -->
+            <!-- Enhanced Active Tabs Row -->
             <div class="tab-row mb-3 hidden" id="packageTabs">
-                <div id="tabBtnFiles" class="tab-btn active cursor-pointer select-none" onclick="switchPackageTab('files')">
-                    <i class="fa-solid fa-box-open text-[10px]"></i>Files (<span id="filesCountTab">0</span>)
-                </div>
-                <div id="tabBtnItems" class="tab-btn cursor-pointer select-none" onclick="switchPackageTab('items')">
-                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>New Items (<span id="itemsCountTab">0</span>)
-                </div>
+                <div class="tab-btn active" data-tab="files"><i class="fa-solid fa-box-open text-[10px]"></i>FILES ( <span id="filesCountTab">0</span> )</div>
+                <div class="tab-btn" data-tab="items"><i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>NEW ITEMS ( <span id="itemsCountTab">0</span> )</div>
             </div>
 
             <div class="scrollable-content-box flex-1 flex flex-col">
@@ -301,15 +297,11 @@ let activeBuildIsNewPatch = false;
 
 let offlineDataPayloadSessionCache = {};
 let currentPreviewRequestId = 0;
-let currentTraySubAssets = []; // Cache list of active expanded sub-assets inside current expanded bundle
-let trayDataCache = {}; // Global dictionary mapping accordion index to downloaded extracted data
+let currentTraySubAssets = []; 
+let trayDataCache = {}; 
 
 let audioCtx, audioSource, audioAnalyser, audioAnimationId;
 let babylonEngine, babylonScene;
-
-// Global Text Workbench UI State Variables
-let originalTextPayloadValue = "";
-let textPreviewContainerIdMaximized = false;
 
 const pipelineTabs = document.getElementById("pipelineTabs");
 const packageTabs = document.getElementById("packageTabs");
@@ -342,24 +334,25 @@ pipelineTabs.addEventListener("click", (e) => {
     }
 });
 
-// Explicit Tab Switching Logic Fix
-window.switchPackageTab = function(tabName) {
-    activePackageTab = tabName;
-    const fileTabBtn = document.getElementById("tabBtnFiles");
-    const itemTabBtn = document.getElementById("tabBtnItems");
+// Solves the switching issue by explicitly forcing display states on click
+packageTabs.addEventListener("click", (e) => {
+    const target = e.target.closest(".tab-btn");
+    if (!target) return;
     
-    if (tabName === "files") {
-        fileTabBtn.classList.add("active");
-        itemTabBtn.classList.remove("active");
+    packageTabs.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
+    target.classList.add("active");
+    
+    const selectedMode = target.getAttribute("data-tab");
+    activePackageTab = selectedMode;
+
+    if(selectedMode === "files") {
         fileList.classList.remove("hidden");
         itemList.classList.add("hidden");
     } else {
-        fileTabBtn.classList.remove("active");
-        itemTabBtn.classList.add("active");
         fileList.classList.add("hidden");
         itemList.classList.remove("hidden");
     }
-};
+});
 
 async function initSystemMatrix() {
     try {
@@ -426,8 +419,6 @@ function resetOutputWorkspace() {
     currentPreviewRequestId++;
     currentTraySubAssets = [];
     trayDataCache = {};
-    originalTextPayloadValue = "";
-    textPreviewContainerIdMaximized = false;
 
     fileList.innerHTML = "";
     itemList.innerHTML = "";
@@ -490,10 +481,19 @@ extractBtn.onclick = async () => {
         
         if (activeNewItems.length === 0) {
             document.getElementById("packageTabs").classList.add("hidden");
-            switchPackageTab('files');
+            activePackageTab = "files";
+            fileList.classList.remove('hidden');
+            itemList.classList.add('hidden');
         } else {
             document.getElementById("packageTabs").classList.remove("hidden");
-            switchPackageTab('files');
+            // Solves toggle override issues by explicitly calling standard CSS actions
+            if (activePackageTab === "files") {
+                fileList.classList.remove('hidden');
+                itemList.classList.add('hidden');
+            } else {
+                fileList.classList.add('hidden');
+                itemList.classList.remove('hidden');
+            }
         }
 
         // Render Insight Report if present
@@ -671,6 +671,7 @@ function toggleSubFolder(folderId, buttonEl, trayIndex) {
     const folder = document.getElementById(folderId);
     const arrow = buttonEl.querySelector('.fa-chevron-down');
     
+    // Collapse other folders inside this tray exclusively
     const activeTray = document.getElementById(`tray-${trayIndex}`);
     if (activeTray) {
         activeTray.querySelectorAll('[id^="folder-"]').forEach(otherFolder => {
@@ -716,6 +717,7 @@ function selectCompositeAsset(compString, element) {
     document.getElementById('mediaTitle').innerText = comp.name;
     document.getElementById('mediaTypeLabel').innerText = comp.type;
 
+    // Apply visual relation indicator mapping info
     const relationBox = document.getElementById('meshRelationBox');
     const descText = document.getElementById('meshRelationDesc');
     descText.innerText = comp.preview_summary;
@@ -738,6 +740,7 @@ function decodeTextSafe(arrayBuffer) {
         const decoder = new TextDecoder('utf-8');
         return decoder.decode(arrayBuffer);
     } catch(e) {
+        // Fallback ASCII decoding
         const arr = new Uint8Array(arrayBuffer);
         let raw = '';
         for (let i = 0; i < arr.byteLength; i++) {
@@ -855,6 +858,131 @@ function previewCategoryFolder(index, key) {
         }, null);
     }
 }
+
+function renderInteractiveJSONTree(obj, container, searchTerm = "") {
+    function buildNode(key, value, path) {
+        const type = Array.isArray(value) ? 'array' : typeof value;
+        const isObject = value !== null && type === 'object';
+        const hasChildren = isObject && Object.keys(value).length > 0;
+        
+        let valPreview = "";
+        if (!isObject) {
+            valPreview = typeof value === 'string' ? `"${value}"` : String(value);
+        } else {
+            valPreview = Array.isArray(value) ? `[Array(${value.length})]` : `{Object}`;
+        }
+        
+        if (searchTerm) {
+            const matchKey = key.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchVal = String(value).toLowerCase().includes(searchTerm.toLowerCase());
+            if (!matchKey && !matchVal && !isObject) {
+                return ""; 
+            }
+        }
+
+        let nodeHtml = `<div class="pl-3 py-1 font-mono text-[10px] select-text">`;
+        
+        if (hasChildren) {
+            nodeHtml += `
+                <div class="flex items-start gap-1 cursor-pointer hover:bg-zinc-900/40 py-0.5 rounded px-1 transition-all" onclick="toggleTreeNode(this)">
+                    <i class="fa-solid fa-chevron-down text-[7px] text-zinc-500 mt-1.5 transition-transform" style="transform: rotate(-90deg);"></i>
+                    <span class="text-yellow-500 font-bold">${key}:</span>
+                    <span class="text-zinc-500 font-mono text-[9px]">${valPreview}</span>
+                </div>
+                <div class="hidden border-l border-zinc-900/60 ml-1.5 pl-2 space-y-0.5">
+            `;
+            
+            if (Array.isArray(value)) {
+                value.forEach((item, idx) => {
+                    nodeHtml += buildNode(`[${idx}]`, item, `${path}.${idx}`);
+                });
+            } else {
+                Object.entries(value).forEach(([k, v]) => {
+                    nodeHtml += buildNode(k, v, `${path}.${k}`);
+                });
+            }
+            
+            nodeHtml += `</div>`;
+        } else {
+            let typeColor = "text-[#38bdf8]"; 
+            if (typeof value === 'string') typeColor = "text-emerald-400";
+            else if (typeof value === 'boolean') typeColor = "text-pink-400";
+            
+            nodeHtml += `
+                <div class="flex items-start gap-1 hover:bg-zinc-900/30 py-0.5 rounded px-1">
+                    <span class="text-yellow-500 font-bold">${key}:</span>
+                    <span class="${typeColor} break-all">${valPreview}</span>
+                </div>
+            `;
+        }
+        
+        nodeHtml += `</div>`;
+        return nodeHtml;
+    }
+
+    container.innerHTML = "";
+    let html = "";
+    if (Array.isArray(obj)) {
+        obj.forEach((item, idx) => {
+            html += buildNode(`[${idx}]`, item, String(idx));
+        });
+    } else {
+        Object.entries(obj).forEach(([k, v]) => {
+            html += buildNode(k, v, k);
+        });
+    }
+    container.innerHTML = html || `<div class="text-[9px] text-zinc-600 italic p-2">No matching fields found for query.</div>`;
+}
+
+function renderInteractivePlainList(text, container, searchTerm = "") {
+    const lines = text.split('\n');
+    let boardHtml = `
+        <div class="w-full h-full flex flex-col min-h-0 text-left">
+            <div class="flex-1 overflow-y-auto custom-scrollbar font-mono text-[9px] space-y-0.5">
+    `;
+    
+    let matchCount = 0;
+    lines.forEach((line, idx) => {
+        const lineTrim = line.trim();
+        if (!lineTrim) return;
+        
+        if (searchTerm && !lineTrim.toLowerCase().includes(searchTerm.toLowerCase())) {
+            return; 
+        }
+        matchCount++;
+        
+        let displayedLine = lineTrim.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        if (searchTerm) {
+            const regex = new RegExp(`(${searchTerm})`, 'gi');
+            displayedLine = displayedLine.replace(regex, `<span class="bg-yellow-500/30 text-yellow-400 font-bold">$1</span>`);
+        }
+        
+        boardHtml += `
+            <div class="flex items-start hover:bg-zinc-950 py-0.5 rounded transition-all">
+                <span class="w-8 text-zinc-700 text-right pr-2 select-none border-r border-zinc-900/60 mr-2 font-bold">${idx + 1}</span>
+                <span class="flex-1 text-zinc-400 break-all select-text font-medium leading-relaxed">${displayedLine}</span>
+            </div>
+        `;
+    });
+    
+    boardHtml += `
+            </div>
+        </div>
+    `;
+    container.innerHTML = matchCount > 0 ? boardHtml : `<div class="text-[9px] text-zinc-600 italic p-2">No matching lines found for query.</div>`;
+}
+
+window.toggleTreeNode = function(headerEl) {
+    const children = headerEl.nextElementSibling;
+    const arrow = headerEl.querySelector('.fa-chevron-down');
+    if (children.classList.contains('hidden')) {
+        children.classList.remove('hidden');
+        arrow.style.transform = 'rotate(0deg)';
+    } else {
+        children.classList.add('hidden');
+        arrow.style.transform = 'rotate(-90deg)';
+    }
+};
 
 async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     const tray = document.getElementById(`tray-${index}`);
@@ -1047,25 +1175,6 @@ function showFallbackError(errorMessage) {
         </div>`;
 }
 
-// Global visual tab switcher method
-window.switchPackageTab = function(tabName) {
-    activePackageTab = tabName;
-    const fileTabBtn = document.getElementById("tabBtnFiles");
-    const itemTabBtn = document.getElementById("tabBtnItems");
-    
-    if (tabName === "files") {
-        fileTabBtn.classList.add("active");
-        itemTabBtn.classList.remove("active");
-        fileList.classList.remove("hidden");
-        itemList.classList.add("hidden");
-    } else {
-        fileTabBtn.classList.remove("active");
-        itemTabBtn.classList.add("active");
-        fileList.classList.add("hidden");
-        itemList.classList.remove("hidden");
-    }
-};
-
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
@@ -1126,133 +1235,154 @@ async function selectFile(item, element) {
 
         initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name, item.associatedTextures || [], item.compositeParts || []);
     } 
+    else if (isImage) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh">
+                    <img src="${liveSourceData}" class="pixelated-render">
+                </div>
+            </div>`;
+    } 
+    else if (isVideo) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper relative">
+                <div class="aspect-16-9-viewport relative">
+                    <div id="videoCenterOverlay" class="center-play-overlay">
+                        <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                    </div>
+                    <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
+                </div>
+                <div class="custom-control-bar">
+                    <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                    <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                            <i class="fa-solid fa-play"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        initCustomVideoController();
+    } 
+    else if (isAudio) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper relative">
+                <div class="aspect-16-9-viewport relative">
+                    <div id="audioCenterOverlay" class="center-play-overlay">
+                        <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                    </div>
+                    <canvas id="audioVisualizerCanvas"></canvas>
+                    <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
+                </div>
+                <div class="custom-control-bar">
+                    <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                    <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                            <i class="fa-solid fa-play"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        initCustomAudioController();
+    } 
+    else if (isBinary && !isText) {
+        mediaBox.innerHTML = `
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
+                    <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
+                        <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
+                            <span>Hexadecimal representation (First 4KB)</span>
+                            <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
+                        </div>
+                        <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
+                    </div>
+                </div>
+            </div>`;
+        try {
+            const rawResponse = await fetch(liveSourceData);
+            if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
+            const arrayBuffer = await rawResponse.arrayBuffer();
+            if (requestId !== currentPreviewRequestId) return;
+            document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
+            const hexDump = getHexDump(arrayBuffer);
+            document.getElementById('hexDumpContainer').textContent = hexDump;
+        } catch (e) {
+            if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+        }
+    } 
     else {
-        document.getElementById('meshRelationBox').classList.add('hidden');
-        
-        if (isImage) {
-            mediaBox.innerHTML = `
-                <div class="custom-player-wrapper h-full">
-                    <div class="aspect-16-9-viewport full-viewport-mesh">
-                        <img src="${liveSourceData}" class="pixelated-render">
-                    </div>
-                </div>`;
-        } 
-        else if (isVideo) {
-            mediaBox.innerHTML = `
-                <div class="custom-player-wrapper relative">
-                    <div class="aspect-16-9-viewport relative">
-                        <div id="videoCenterOverlay" class="center-play-overlay">
-                            <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
-                        </div>
-                        <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
-                    </div>
-                    <div class="custom-control-bar">
-                        <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                        <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                        <div class="flex items-center gap-2 flex-shrink-0">
-                            <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                                <i class="fa-solid fa-play"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>`;
-            initCustomVideoController();
-        } 
-        else if (isAudio) {
-            mediaBox.innerHTML = `
-                <div class="custom-player-wrapper relative">
-                    <div class="aspect-16-9-viewport relative">
-                        <div id="audioCenterOverlay" class="center-play-overlay">
-                            <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
-                        </div>
-                        <canvas id="audioVisualizerCanvas"></canvas>
-                        <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
-                    </div>
-                    <div class="custom-control-bar">
-                        <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                        <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                        <div class="flex items-center gap-2 flex-shrink-0">
-                            <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                                <i class="fa-solid fa-play"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>`;
-            initCustomAudioController();
-        } 
-        else if (isBinary && !isText) {
-            mediaBox.innerHTML = `
-                <div class="custom-player-wrapper h-full">
-                    <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
-                        <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
-                            <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
-                                <span>Hexadecimal representation (First 4KB)</span>
-                                <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
-                            </div>
-                            <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
-                        </div>
-                    </div>
-                </div>`;
-            try {
-                const rawResponse = await fetch(liveSourceData);
-                if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
-                const arrayBuffer = await rawResponse.arrayBuffer();
-                if (requestId !== currentPreviewRequestId) return;
-                document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
-                const hexDump = getHexDump(arrayBuffer);
-                document.getElementById('hexDumpContainer').textContent = hexDump;
-            } catch (e) {
-                if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+        try {
+            let processedTextString = "";
+            let isJsonParsed = false;
+            let parsedJson = null;
+
+            if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
+                const parts = liveSourceData.split('base64,');
+                const binaryString = window.atob(parts[1]);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                processedTextString = decodeTextSafe(bytes.buffer);
+            } else {
+                const rawTextResponse = await fetch(liveSourceData);
+                if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
+                const arrayBuffer = await rawTextResponse.arrayBuffer();
+                processedTextString = decodeTextSafe(arrayBuffer);
             }
-        } 
-        else {
+
+            if (requestId !== currentPreviewRequestId) return;
+
+            // Stop loop routing fallback HTML documents from loading
+            const sanitizedCheck = processedTextString.trim().toLowerCase();
+            if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
+                throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset data.");
+            }
+
             try {
-                let processedTextString = "";
-                let isJsonParsed = false;
-                let parsedJson = null;
+                parsedJson = json_parse_clean(processedTextString);
+                if (parsedJson) isJsonParsed = true;
+            } catch(e) {}
 
-                if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
-                    const parts = liveSourceData.split('base64,');
-                    const binaryString = window.atob(parts[1]);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    processedTextString = decodeTextSafe(bytes.buffer);
-                } else {
-                    const rawTextResponse = await fetch(liveSourceData);
-                    if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
-                    const arrayBuffer = await rawTextResponse.arrayBuffer();
-                    processedTextString = decodeTextSafe(arrayBuffer);
-                }
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper h-full">
+                    <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204] overflow-hidden flex flex-col p-3 text-left">
+                        <div class="flex items-center justify-between border-b border-zinc-900 pb-1.5 mb-2 flex-shrink-0">
+                            <span class="text-[9px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-1.5"><i class="fa-solid fa-code text-yellow-500"></i>${isJsonParsed ? 'Collapsible Parameter Inspector' : 'Interactive Lined Matrix'}</span>
+                            <div class="relative w-44">
+                                <input type="text" id="previewSearchFilter" placeholder="Filter config entries..." class="w-full pl-6 pr-2 py-0.5 bg-[#09090d] border border-zinc-800 rounded-lg text-[8px] text-zinc-300 font-bold outline-none focus:border-yellow-500 transition-all font-mono">
+                                <i class="fa-solid fa-filter text-[7px] text-zinc-600 absolute left-2 top-2"></i>
+                            </div>
+                        </div>
+                        <div id="previewInteractiveBody" class="flex-1 overflow-y-auto custom-scrollbar pr-1"></div>
+                    </div>
+                </div>
+            `;
 
-                if (requestId !== currentPreviewRequestId) return;
-
-                // Stop loop routing fallback HTML documents from loading
-                const sanitizedCheck = processedTextString.trim().toLowerCase();
-                if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
-                    throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset file data.");
-                }
-
-                try {
-                    parsedJson = json_parse_clean(processedTextString);
-                    if (parsedJson) isJsonParsed = true;
-                } catch(e) {}
-
+            const filterInput = document.getElementById('previewSearchFilter');
+            const interactiveBody = document.getElementById('previewInteractiveBody');
+            
+            function refreshTextInspector() {
+                const query = filterInput.value.trim();
                 if (isJsonParsed && parsedJson) {
-                    mediaBox.innerHTML = renderStructuredJSON(parsedJson, ext, item.label, item);
+                    renderInteractiveJSONTree(parsedJson, interactiveBody, query);
                 } else {
-                    mediaBox.innerHTML = `
-                        <div class="custom-player-wrapper h-full">
-                            <div class="aspect-16-9-viewport full-viewport-mesh">
-                                <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
-                            </div>
-                        </div>`;
+                    renderInteractivePlainList(processedTextString, interactiveBody, query);
                 }
-            } catch (e) {
-                if (requestId === currentPreviewRequestId) showFallbackError(e.message);
             }
+            
+            if (isJsonParsed && parsedJson) {
+                renderInteractiveJSONTree(parsedJson, interactiveBody, "");
+            } else {
+                renderInteractivePlainList(processedTextString, interactiveBody, "");
+            }
+            
+            filterInput.oninput = () => { refreshTextInspector(); };
+
+        } catch (e) {
+            if (requestId === currentPreviewRequestId) showFallbackError(e.message);
         }
     }
 }
@@ -1289,7 +1419,7 @@ function cleanPreviousMediaTracks() {
         audioCtx = null; 
     }
     if (babylonEngine) { 
-        window.removeEventListener("resize", resizeBabylonViewportMatrix); 
+        window.removeEventListener("resize", resizeBabViewportMatrix); 
         try { babylonEngine.dispose(); } catch(e){}
         babylonEngine = null; 
     }

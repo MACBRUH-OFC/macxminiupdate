@@ -120,6 +120,7 @@ def encode_suffix(suffix):
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
 def get_file_info_data_exact(version):
+    """Fetches exact version without fallback."""
     if version in FILE_INFO_CACHE:
         return FILE_INFO_CACHE[version]
         
@@ -136,6 +137,7 @@ def get_file_info_data_exact(version):
     return None, None, None
 
 def get_file_info_data(version):
+    """Primary fetch routine."""
     return get_file_info_data_exact(version)
 
 def get_multiple_file_info_data(versions):
@@ -167,6 +169,7 @@ def get_multiple_file_info_data(versions):
     return results
 
 def find_latest_active_version(requested_version):
+    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
     candidates = [requested_version]
     for step in [1, 2, 3]:
         nxt = get_next_version(requested_version, step)
@@ -375,7 +378,7 @@ def extract_new_game_items(active_version, new_text):
     return grouped_items
 
 def check_name_similarity(name1, name2):
-    """Fuzzy word-level token matcher for Unity assets."""
+    """Normalized token alignment index mapping mesh names with texture assets safely."""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
     n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
     
@@ -425,6 +428,7 @@ def find_references_in_json(obj, asset_names):
     return referenced
 
 def extract_version_from_input(input_str):
+    """Fuzzy regex matching system extracting clean target versions or fileinfo URLs."""
     if not input_str:
         return None
     match = re.search(r'(?:/android/|android/|^)(\d+\.\d+\.\d+)', input_str.strip())
@@ -506,15 +510,728 @@ def analyze_update_purpose(files, new_items):
 def format_bytes_python(bytes_val):
     if not bytes_val:
         return "0 Bytes"
-    # Unified scale format for the update size representation
     for unit in ['Bytes', 'KB', 'MB', 'GB']:
         if bytes_val < 1024.0:
             return f"{round(bytes_val, 2)} {unit}"
         bytes_val /= 1024.0
     return f"{round(bytes_val, 2)} GB"
 
+def latest_version_logic():
+    try:
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
+            
+            candidates = [base_ver]
+            for step in [1, 2, 3]:
+                nxt = get_next_version(base_ver, step)
+                if nxt:
+                    candidates.append(nxt)
+            
+            fetched_maps = get_multiple_file_info_data(candidates)
+            
+            active_ver = base_ver
+            for cand in reversed(candidates):
+                if cand in fetched_maps:
+                    active_ver = cand
+                    break
+                    
+            target_ver = get_next_version(active_ver, 1)
+            
+            return jsonify({
+                "success": True, 
+                "current_version": active_ver, 
+                "target_version": target_ver
+            })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+    return jsonify({"success": False, "message": "Failed response lookup."}), 500
+
+def check_update_logic():
+    input_val = request.args.get('version', '').strip()
+    version = extract_version_from_input(input_val)
+    if not version:
+        return jsonify({"success": False, "message": "Incorrect version format or link entered"}), 400
+
+    new_text, active_version, base_url = get_file_info_data_exact(version)
+    if not new_text:
+        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
+        
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+        
+    fetched_maps_prev = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps_prev[v][0] for v in prev_versions if v in fetched_maps_prev]
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: old_size = int(parts[2])
+                except Exception: old_size = 0
+                old_files_map[file_id] = old_size
+    file_infos = []
+    total_size = 0
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
+        try: size = int(size_str)
+        except Exception: size = 0
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: status = "Modified"
+            else: continue
+        else:
+            status = "New"
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        file_name = file_id.split('/')[-1]
+        token = encode_token(download_url, file_name, 'application/octet-stream')
+        proxy_url = f"/api?action=stream&token={token}"
+        total_size += size
+        file_infos.append({
+            "fileName": file_id,
+            "size": size,
+            "url": proxy_url,
+            "status": status
+        })
+    new_items = []
+    try:
+        new_items = extract_new_game_items(active_version, new_text)
+    except Exception as e:
+        print(f"Error parsing game items hotfix: {e}")
+        
+    analysis = analyze_update_purpose(file_infos, new_items)
+    
+    return jsonify({
+        "success": True,
+        "version": active_version,
+        "totalSize": total_size,
+        "files": file_infos,
+        "new_items": new_items,
+        "analysis": analysis
+    })
+
+def handle_extractor_response(response, bundle_url=None):
+    if not response.ok:
+        try: err_data = response.json()
+        except Exception: err_data = {"error": response.text}
+        return jsonify(err_data), response.status_code
+        
+    try:
+        extractor_data = response.json()
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Invalid JSON returned from extractor: {str(e)}"}), 500
+
+    assets_list = (
+        extractor_data.get("assets") or 
+        extractor_data.get("files") or 
+        extractor_data.get("extracted") or 
+        extractor_data.get("data")
+    )
+    if not isinstance(assets_list, list):
+        assets_list = []
+    
+    processed_assets = []
+    for asset in assets_list:
+        filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
+        detected_content_type = get_mime_type(filename_str)
+        
+        structured_data = None
+        for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
+            val = asset.get(key)
+            if val is not None:
+                if isinstance(val, (dict, list)):
+                    structured_data = val
+                    break
+                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
+                    try:
+                        structured_data = json.loads(val)
+                        break
+                    except Exception:
+                        pass
+
+        file_bytes = b""
+        if structured_data is not None:
+            try:
+                json_str = json.dumps(structured_data, indent=2, ensure_ascii=False)
+                file_bytes = json_str.encode('utf-8')
+                detected_content_type = "application/json"
+            except Exception:
+                file_bytes = b""
+        else:
+            raw_val = asset.get("data", "")
+            if isinstance(raw_val, str) and raw_val:
+                try:
+                    file_bytes = base64.b64decode(raw_val)
+                except Exception:
+                    file_bytes = raw_val.encode('utf-8')
+
+        remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
+        if not remote_preview_url:
+            if not file_bytes:
+                file_bytes = b"{}"
+                detected_content_type = "application/json"
+            dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
+            remote_preview_url = f"https://local-placeholder/{dummy_hash}"
+
+        # Embedded original source bundle reference to allow stateless retrieval fallbacks
+        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes, bundle_url=bundle_url)
+        decoded = decode_token(local_cache_token)
+        cache_key = decoded.get("cache_key") if decoded else local_cache_token
+        
+        global MEMORY_ASSET_CACHE
+        MEMORY_ASSET_CACHE[cache_key] = {
+            "content": file_bytes,
+            "filename": filename_str,
+            "content_type": detected_content_type
+        }
+        
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
+        asset["preview_url"] = local_proxy_route
+        asset["url"] = local_proxy_route
+        asset["fileName"] = filename_str
+        asset["label"] = detected_content_type
+        processed_assets.append(asset)
+
+    # Separate assets by visual groups to scan data reference connections
+    meshes = [a for a in processed_assets if a["fileName"].lower().endswith(".obj")]
+    textures = [a for a in processed_assets if any(a["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
+    materials = [a for a in processed_assets if "material" in a["fileName"].lower() or "material" in (a.get("type") or "").lower()]
+    renderers = [a for a in processed_assets if "renderer" in a["fileName"].lower() or "renderer" in (a.get("type") or "").lower()]
+
+    # 1. Parse Materials to find referenced textures
+    material_to_textures = {}
+    for mat in materials:
+        mat_name = os.path.splitext(os.path.basename(mat["fileName"]))[0].lower()
+        mat_cache_key = mat["url"].split("token=")[-1]
+        mat_item = MEMORY_ASSET_CACHE.get(mat_cache_key)
+        if mat_item:
+            try:
+                mat_json = json.loads(mat_item["content"].decode('utf-8'))
+                referenced = find_references_in_json(mat_json, [t["fileName"] for t in textures])
+                if referenced:
+                    material_to_textures[mat_name] = referenced
+            except Exception: pass
+
+    # 2. Parse Renderers to map meshes to materials
+    mesh_to_materials = {}
+    for rend in renderers:
+        rend_cache_key = rend["url"].split("token=")[-1]
+        rend_item = MEMORY_ASSET_CACHE.get(rend_cache_key)
+        if rend_item:
+            try:
+                rend_json = json.loads(rend_item["content"].decode('utf-8'))
+                ref_meshes = find_references_in_json(rend_json, [m["fileName"] for m in meshes])
+                ref_mats = find_references_in_json(rend_json, [mt["fileName"] for mt in materials])
+                for rm in ref_meshes:
+                    rm_name = os.path.splitext(os.path.basename(rm))[0].lower()
+                    for rmat in ref_mats:
+                        rmat_name = os.path.splitext(os.path.basename(rmat))[0].lower()
+                        mesh_to_materials[rm_name] = rmat_name
+            except Exception: pass
+
+    # 3. Associate Textures with Meshes using Compiled reference pathways
+    for m in meshes:
+        m_name = os.path.splitext(os.path.basename(m["fileName"]))[0].lower()
+        matched_textures = []
+        
+        target_mat = mesh_to_materials.get(m_name)
+        if target_mat and target_mat in material_to_textures:
+            for tex_file in material_to_textures[target_mat]:
+                for t in textures:
+                    if t["fileName"].lower() == tex_file.lower():
+                        matched_textures.append(t["url"])
+                        
+        if not matched_textures:
+            for t in textures:
+                t_name = os.path.splitext(os.path.basename(t["fileName"]))[0].lower()
+                if check_name_similarity(m_name, t_name):
+                    matched_textures.append(t["url"])
+                    
+        m["associated_textures"] = matched_textures
+
+    # Group sibling parts for concurrent rendering using semantic checks
+    composites = []
+    used_meshes_in_composites = set()
+    
+    for i, m1 in enumerate(meshes):
+        if m1["fileName"] in used_meshes_in_composites:
+            continue
+        m1_basename = os.path.basename(m1["fileName"])
+        m1_name = os.path.splitext(m1_basename)[0].lower()
+        
+        siblings = []
+        for j, m2 in enumerate(meshes):
+            if i == j: continue
+            m2_name = os.path.splitext(os.path.basename(m2["fileName"]))[0].lower()
+            if check_name_similarity(m1_name, m2_name):
+                siblings.append(m2)
+                
+        if siblings:
+            all_composite_meshes = [m1] + siblings
+            comp_textures = set()
+            comp_parts = []
+            
+            for mesh_obj in all_composite_meshes:
+                used_meshes_in_composites.add(mesh_obj["fileName"])
+                for tex_url in mesh_obj["associated_textures"]:
+                    comp_textures.add(tex_url)
+                    
+            for mesh_obj in siblings:
+                comp_parts.append({
+                    "name": os.path.basename(mesh_obj["fileName"]),
+                    "url": mesh_obj["url"],
+                    "associated_textures": mesh_obj["associated_textures"]
+                })
+                
+            composites.append({
+                "id": f"comp_{i}",
+                "name": f"{m1_basename.split('.')[0]} (Assembly Scene)",
+                "type": "Composite 3D Assembly",
+                "url": m1["url"],
+                "associated_textures": list(comp_textures),
+                "composite_parts": comp_parts,
+                "preview_summary": f"Unified assembly of {len(all_composite_meshes)} structural mesh layers and {len(comp_textures)} mapped shader textures."
+            })
+
+    # Group categorized explorer categories cleanly
+    categories = {
+        "3d_models": [m for m in meshes if m["fileName"] not in used_meshes_in_composites],
+        "textures": textures,
+        "materials": materials,
+        "animations": [a for a in processed_assets if "animation" in a["fileName"].lower() or "animator" in a["fileName"].lower()],
+        "configs": [a for a in processed_assets if any(ext in a["fileName"].lower() for ext in [".json", ".txt", ".dat", ".xml"]) and not any(a["fileName"] == m["fileName"] for m in meshes) and not any(a["fileName"] == t["fileName"] for t in textures)],
+        "others": []
+    }
+    
+    for asset in processed_assets:
+        is_categorized = (
+            any(asset["fileName"] == m["fileName"] for m in meshes) or
+            any(asset["fileName"] == t["fileName"] for t in textures) or
+            any(asset["fileName"] == mat["fileName"] for mat in materials) or
+            any(asset["fileName"] == anim["fileName"] for anim in categories["animations"]) or
+            any(asset["fileName"] == conf["fileName"] for conf in categories["configs"])
+        )
+        if not is_categorized:
+            categories["others"].append(asset)
+
+    response_data = {
+        "success": True,
+        "composites": composites,
+        "categories": categories,
+        "assets": processed_assets
+    }
+    return jsonify(response_data), 200
+
+def process_file_logic():
+    bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
+    token = request.args.get('token', '') or request.form.get('token', '')
+    real_bundle_url = ""
+    if "token=" in bundle_url:
+        token_match = re.search(r'token=([^&]+)', bundle_url)
+        if token_match:
+            tok = token_match.group(1)
+            decoded = decode_token(tok)
+            if decoded: real_bundle_url = decoded.get("url", "")
+    elif token:
+        decoded = decode_token(token)
+        if decoded: real_bundle_url = decoded.get("url", "")
+    if not real_bundle_url and bundle_url.startswith("http"):
+        real_bundle_url = bundle_url
+    if 'file' in request.files:
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            files = {
+                'asset_bundle': (uploaded_file.filename, uploaded_file.read(), uploaded_file.content_type)
+            }
+            data = {
+                'bundle_url': real_bundle_url if real_bundle_url else uploaded_file.filename
+            }
+            try:
+                response = http_session.post(EXTRACTOR_API_URL, files=files, data=data, timeout=45)
+                return handle_extractor_response(response, bundle_url=real_bundle_url)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
+    if real_bundle_url:
+        try:
+            encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            response = http_session.get(extractor_url, timeout=45)
+            return handle_extractor_response(response, bundle_url=real_bundle_url)
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
+    return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
+
+def stream_cache_logic(token):
+    if not token: return "Missing token query parameter", 400
+    decoded = decode_token(token)
+    if not decoded: return "Expired or invalid stream token payload.", 404
+    filename = decoded.get("filename", "file")
+    mime_type = decoded.get("content_type", "application/octet-stream")
+    cache_key = decoded.get("cache_key")
+    
+    global MEMORY_ASSET_CACHE
+    if cache_key and cache_key in MEMORY_ASSET_CACHE:
+        cached_item = MEMORY_ASSET_CACHE[cache_key]
+        response = Response(cached_item["content"], mimetype=mime_type)
+        response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+        
+    if "content_b64" in decoded:
+        try:
+            content = base64.b64decode(decoded["content_b64"])
+            if cache_key:
+                MEMORY_ASSET_CACHE[cache_key] = {
+                    "content": content,
+                    "filename": filename,
+                    "content_type": mime_type
+                }
+            response = Response(content, mimetype=mime_type)
+            response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+            response.headers["Accept-Ranges"] = "bytes"
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        except Exception: pass
+        
+    # Stateless extract fallback on-demand
+    bundle_url = decoded.get("bundle_url")
+    if bundle_url:
+        try:
+            sub_files = parse_bundle_subfiles(bundle_url)
+            for sf in sub_files:
+                sf_name = sf.get("name") or sf.get("fileName") or ""
+                if sf_name == filename:
+                    structured_data = None
+                    for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
+                        val = sf.get(key)
+                        if val is not None:
+                            if isinstance(val, (dict, list)):
+                                structured_data = val
+                                break
+                            elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
+                                try:
+                                    structured_data = json.loads(val)
+                                    break
+                                except Exception: pass
+                    
+                    file_bytes = b""
+                    if structured_data is not None:
+                        file_bytes = json.dumps(structured_data, indent=2, ensure_ascii=False)
+                    else:
+                        raw_val = sf.get("data", "")
+                        if isinstance(raw_val, str) and raw_val:
+                            try: file_bytes = base64.b64decode(raw_val)
+                            except Exception: file_bytes = raw_val.encode('utf-8')
+                            
+                    if file_bytes:
+                        MEMORY_ASSET_CACHE[cache_key] = {
+                            "content": file_bytes,
+                            "filename": filename,
+                            "content_type": mime_type
+                        }
+                        response = Response(file_bytes, mimetype=mime_type)
+                        response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+                        response.headers["Accept-Ranges"] = "bytes"
+                        response.headers["Access-Control-Allow-Origin"] = "*"
+                        return response
+        except Exception as e:
+            print(f"Stateless extraction recovery failed: {e}")
+
+    remote_url = decoded.get("url")
+    if remote_url and remote_url.startswith("http"):
+        try:
+            res = http_session.get(remote_url, timeout=15)
+            if res.status_code == 200:
+                if cache_key:
+                    MEMORY_ASSET_CACHE[cache_key] = {
+                        "content": res.content,
+                        "filename": filename,
+                        "content_type": mime_type
+                    }
+                response = Response(res.content, mimetype=mime_type)
+                response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+                response.headers["Accept-Ranges"] = "bytes"
+                response.headers["Access-Control-Allow-Origin"] = "*"
+                return response
+        except Exception: pass
+    return "Expired or unavailable stream token payload.", 404
+
+def extract_zip_logic(token):
+    if not token: return "Missing token query parameter", 400
+    decoded = decode_token(token)
+    if not decoded: return "Invalid or expired stream token payload", 400
+    remote_url = decoded.get("url")
+    if not remote_url: return "Target bundle address missing in decrypted token payload", 400
+    encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
+    extractor_url = f"{EXTRACTOR_API_URL}&download_type=zip"
+    try:
+        res = http_session.get(extractor_url, timeout=60, stream=True)
+        if res.status_code == 200:
+            filename = decoded.get("filename", "extracted_asset") + ".zip"
+            def generate():
+                for chunk in res.iter_content(chunk_size=8192): yield chunk
+            response = Response(generate(), mimetype='application/zip')
+            response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        else:
+            return f"Extractor pipeline failure status code: {res.status_code}", 500
+    except Exception as e:
+        return f"Failed connecting proxy mapping to zip extractor endpoint: {e}", 500
+
+def bulk_zip_logic(version):
+    if not version or not re.match(r'^\d+\.\d+\.\d+$', version): return "Incorrect version format entered", 400
+    new_text, active_version, base_url = get_file_info_data(version)
+    if not new_text:
+        return "Target version logs missing from server", 404
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: old_size = int(parts[2])
+                except Exception: old_size = 0
+                old_files_map[file_id] = old_size
+    targets = []
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
+        try: size = int(size_str)
+        except Exception: size = 0
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: pass
+            else: continue
+        else: pass
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        targets.append((file_id, download_url))
+    if not targets: return "No assets could be extracted for this version update", 400
+    zip_io = io.BytesIO()
+    files_added_to_zip = 0
+    def concurrent_fetch_and_extract(target):
+        file_id, d_url = target
+        try:
+            encoded_url = base64.urlsafe_b64encode(d_url.encode('utf-8')).decode('utf-8')
+            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
+            res = http_session.get(extractor_url, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                return file_id, data.get("files", []) or data.get("assets", [])
+        except Exception as e:
+            print(f"Error parallel extracting {file_id}: {e}")
+        return file_id, []
+    with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures_map = executor.map(concurrent_fetch_and_extract, targets)
+            for file_id, extracted_files in futures_map:
+                for ext_file in extracted_files:
+                    fname = ext_file.get("name")
+                    zpath = ext_file.get("path") or fname
+                    b64_content = ext_file.get("data", "")
+                    if b64_content and fname:
+                        try:
+                            file_bytes = base64.b64decode(b64_content)
+                            zf.writestr(f"{file_id}_extracted/{zpath}", file_bytes)
+                            files_added_to_zip += 1
+                        except Exception: pass
+    if files_added_to_zip == 0: return "No assets could be extracted for this version update", 400
+    zip_io.seek(0)
+    response = Response(zip_io.getvalue(), mimetype='application/zip')
+    response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
+    return response
+
+
+# ==========================================
+# Telegram Bot Database & Webhook System
+# ==========================================
+
+def send_message(chat_id, text, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        return res.json()
+    except Exception as e:
+        print(f"Telegram send error: {e}")
+    return None
+
+def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+         print(f"Telegram menu send error: {e}")
+
+def read_db_from_chat(chat_id):
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            text = res["result"]["pinned_message"].get("text", "")
+            if "📦 DATABASE STORAGE" in text:
+                lines = text.split("\n")
+                for line in lines:
+                    line_strip = line.strip()
+                    if line_strip.startswith("{") and line_strip.endswith("}"):
+                        return json.loads(line_strip)
+    except Exception as e:
+        print(f"DB read warning for {chat_id}: {e}")
+    return None
+
+def write_db_to_chat(chat_id, db_dict):
+    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            msg = res["result"]["pinned_message"]
+            if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
+                    "chat_id": chat_id,
+                    "message_id": msg["message_id"],
+                    "text": db_text
+                }, timeout=10)
+                return
+        new_msg = send_message(chat_id, db_text)
+        if new_msg and new_msg.get("ok"):
+            msg_id = new_msg["result"]["message_id"]
+            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "disable_notification": True
+            }, timeout=10)
+    except Exception as e:
+         print(f"DB write warning: {e}")
+
+def get_db():
+    owner_db = read_db_from_chat(OWNER_ID)
+    if not owner_db:
+        owner_db = read_db_from_chat(GROUP_ID)
+        if owner_db:
+            write_db_to_chat(OWNER_ID, owner_db)
+            try:
+                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
+                if res.get("ok") and "pinned_message" in res["result"]:
+                    msg = res["result"]["pinned_message"]
+                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+            except Exception: pass
+            
+    if not owner_db:
+        return {
+            "allowed_users": [OWNER_ID], 
+            "pending_requests": [],
+            "rejection_sticker": None,
+            "owner_state": None
+        }
+        
+    needs_write = False
+    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
+    for k in legacy_keys:
+        if k in owner_db:
+            owner_db.pop(k, None)
+            needs_write = True
+            
+    if "allowed_users" not in owner_db: 
+        owner_db["allowed_users"] = [OWNER_ID]
+        needs_write = True
+    if "pending_requests" not in owner_db: 
+        owner_db["pending_requests"] = []
+        needs_write = True
+        
+    if needs_write:
+        save_db(owner_db)
+        
+    return owner_db
+
+def save_db(db):
+    write_db_to_chat(OWNER_ID, db)
+
+def is_user_allowed(user_id):
+    if user_id == OWNER_ID: return True
+    db = get_db()
+    for u in db.get("allowed_users", []):
+        if isinstance(u, int) and u == user_id: return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
+    return False
+
+def is_action_permitted(chat_id, user_id):
+    if user_id == OWNER_ID: return True
+    if str(chat_id) == GROUP_ID: return True
+    if is_user_allowed(user_id): return True
+    return False
+
+def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
+    db = get_db()
+    allowed = db.get("allowed_users", [])
+    exists = False
+    for i, u in enumerate(allowed):
+        if isinstance(u, int) and u == user_id:
+            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
+            exists = True
+            break
+        elif isinstance(u, dict) and u.get("user_id") == user_id:
+            u["first_name"] = first_name
+            u["username"] = username
+            u["chat_title"] = chat_title
+            exists = True
+            break
+    if not exists:
+        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
+    db["allowed_users"] = allowed
+    save_db(db)
+
+def add_pending_request(user_id, first_name, username, chat_title):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    if not any(p["user_id"] == user_id for p in pending):
+        pending.append({
+            "user_id": user_id,
+            "first_name": first_name,
+            "username": username,
+            "chat_title": chat_title
+        })
+        db["pending_requests"] = pending
+        write_db_to_chat(OWNER_ID, db)
+
+def remove_pending_request(user_id):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    pending = [p for p in pending if p["user_id"] != user_id]
+    db["pending_requests"] = pending
+    write_db_to_chat(OWNER_ID, db)
+
 def send_item_icons_to_chat(chat_id, new_items):
-    """Downloads all newly parsed item icons and delivers them directly as cleanly formatted Telegram photo messages."""
+    """Generates and delivers lightweight text-only inline image hyperlinked elements for high-speed Telegram presentation."""
     for item in new_items:
         item_id = item.get("id")
         item_name = item.get("name", "Unknown Item")
@@ -522,18 +1239,21 @@ def send_item_icons_to_chat(chat_id, new_items):
         if not item_id or not icon_url:
             continue
         try:
-            res = http_session.get(icon_url, timeout=12)
-            if res.status_code == 200:
-                url = f"{TELEGRAM_API}/sendPhoto"
-                files = {"photo": (f"{item_id}.png", res.content, "image/png")}
-                payload = {
-                    "chat_id": chat_id,
-                    "caption": f"✨ New Item Discovered:\n<b>{item_name}</b>\nID: <code>{item_id}</code>",
-                    "parse_mode": "HTML"
-                }
-                http_session.post(url, data=payload, files=files, timeout=15)
+            # Inline hyperlinked monospaced layout (without the '✨ New Item:' prefix)
+            text_payload = (
+                f"✨ <b>{item_name}</b>\n"
+                f"🆔 ID: <a href=\"{icon_url}\"><code>{item_id}</code></a>"
+            )
+            url = f"{TELEGRAM_API}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": text_payload,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False  # Must be False so Telegram renders the icon_url preview automatically
+            }
+            http_session.post(url, json=payload, timeout=10)
         except Exception as e:
-            print(f"Error sending item icon for {item_id}: {e}")
+            print(f"Error loading Telegram inline preview text for item {item_id}: {e}")
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -600,7 +1320,6 @@ def run_miniupdate_extraction_details(version):
     
     analysis = analyze_update_purpose(simple_file_list, new_items)
 
-    # Category classifications for the bot
     categories = {"obj": 0, "png": 0, "json": 0, "other": 0}
     for fid, stat, sz in file_entries:
         l_fid = fid.lower()
@@ -609,29 +1328,30 @@ def run_miniupdate_extraction_details(version):
         elif l_fid.endswith(".json"): categories["json"] += 1
         else: categories["other"] += 1
 
+    # Stylized, premium formatting utilizing combination underlines, bolding and blockquote guides 
     msg = [
-        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
+        "<b>╭─📊 <u>MINIUPDATE ANALYSIS</u> ────</b>",
         "│",
         f"├ 🟢 Version Extracted: <b>{version}</b>",
-        f"├ MiniUpdate Size: <b>{size_display}</b>",
+        f"├ MiniUpdate Size: <b><i>{size_display}</i></b>",
         f"├ Changed Files Count: <b>{changed_files_count}</b>",
         f"├ New Files Count: <b>{new_files_count}</b>",
         "│",
-        "├ 🧠 INTEL REPORT:",
+        "├ 🧠 <b><i>INTEL REPORT:</i></b>",
         f"│ <code>{analysis['summary']}</code>",
         "│"
     ]
 
-    # Grouped files category overview for Telegram
-    msg.append("├ 📁 CATEGORIES:")
+    # Category summaries block
+    msg.append("├ 📁 <b><u>CATEGORIES SUMMARY:</u></b>")
     msg.append("<blockquote>")
-    if categories["obj"] > 0: msg.append(f"📦 <b>Geometry & 3D Meshes:</b> {categories['obj']} meshes")
-    if categories["png"] > 0: msg.append(f"🎨 <b>Textures & Sprite Assets:</b> {categories['png']} sprites")
-    if categories["json"] > 0: msg.append(f"⚙️ <b>MonoBehaviour & GameData:</b> {categories['json']} configs")
-    if categories["other"] > 0: msg.append(f"📝 <b>Other Resources:</b> {categories['other']} files")
+    if categories["obj"] > 0: msg.append(f"📦 <b>Geometry &amp; 3D Meshes:</b> <code>{categories['obj']} meshes</code>")
+    if categories["png"] > 0: msg.append(f"🎨 <b>Textures &amp; Sprite Assets:</b> <code>{categories['png']} sprites</code>")
+    if categories["json"] > 0: msg.append(f"⚙️ <b>MonoBehaviour &amp; GameData:</b> <code>{categories['json']} configs</code>")
+    if categories["other"] > 0: msg.append(f"📝 <b>Other Resources:</b> <code>{categories['other']} files</code>")
     msg.append("</blockquote>")
 
-    msg.append("├ 📂 DISCOVERED FILES:")
+    msg.append("├ 📂 <b><u>DISCOVERED FILES:</u></b>")
     msg.append("<blockquote>")
     max_visible_files = 15
     for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
@@ -652,7 +1372,7 @@ def run_miniupdate_extraction_details(version):
 
     if new_items:
         msg.append("│")
-        msg.append("├ ✨ NEW GAME ITEMS:")
+        msg.append("├ ✨ <b><u>NEW GAME ITEMS:</u></b>")
         msg.append("<blockquote>")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
@@ -664,7 +1384,6 @@ def run_miniupdate_extraction_details(version):
 
     msg.append("╰──────────────────────")
     
-    # Compile composite mesh-texture connections on the fly for zip buttons
     file_keyboard_mappings = {}
     meshes = [f[0] for f in file_entries if f[0].lower().endswith(".obj")]
     textures = [f[0] for f in file_entries if any(f[0].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg"])]
@@ -835,12 +1554,10 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
-            # Secure action bypass for allowed group chat
             if not is_action_permitted(chat_id, user_id):
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
-            # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
@@ -852,7 +1569,6 @@ def handle_bot_webhook():
                 first_name = cb_user.get("first_name", "Unknown")
                 username = cb_user.get("username", "None")
                 
-                # Manual request authorization prompting Owner's Personal Chat
                 http_session.post(f"{TELEGRAM_API}/sendMessage", json={
                     "chat_id": OWNER_ID,
                     "text": (
@@ -870,7 +1586,6 @@ def handle_bot_webhook():
                     }
                 }, timeout=10)
                 
-                # Edit requester's button feedback state
                 http_session.post(f"{TELEGRAM_API}/editMessageText", json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
@@ -902,7 +1617,6 @@ def handle_bot_webhook():
                 ver = data.replace("check_ver_", "").replace("back_ver_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
-                # Show dynamic in-progress tracking state in-place
                 url = f"{TELEGRAM_API}/editMessageText"
                 http_session.post(url, json={
                     "chat_id": chat_id,
@@ -915,7 +1629,6 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     
-                    # Group model-textures Zip action button directly
                     for fname, action_data in file_keyboard_mappings.items():
                         if action_data.startswith("zip_comp_"):
                             comp_id = action_data.replace("zip_comp_", "")
@@ -924,7 +1637,6 @@ def handle_bot_webhook():
                                 keyboard.append([{"text": f"📦 Combined {meta['name']} Scene ZIP", "callback_data": f"zip_comp_{comp_id}"}])
                                 
                     if file_entries:
-                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -936,7 +1648,6 @@ def handle_bot_webhook():
                         "reply_markup": {"inline_keyboard": keyboard}
                     }, timeout=10)
 
-                    # Trigger dynamic delivery of discovered item icons if item details present
                     new_items = extract_new_game_items(ver, get_file_info_data_exact(ver)[0])
                     if new_items:
                         send_item_icons_to_chat(chat_id, new_items)
@@ -1030,7 +1741,6 @@ def handle_bot_webhook():
                     target_url = meta.get("url")
                     ver = meta.get("version", "1.126.6")
                     
-                    # Update message to show "Extracting" progress state
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
@@ -1142,7 +1852,6 @@ def handle_bot_webhook():
                         sf = sub_files[idx]
                         fname = sf.get("name") or sf.get("fileName")
                         
-                        # Edit current inline menu to show "Extracting" status
                         url = f"{TELEGRAM_API}/editMessageText"
                         http_session.post(url, json={
                             "chat_id": chat_id,
@@ -1154,10 +1863,8 @@ def handle_bot_webhook():
                         b64 = sf.get("data", "")
                         if b64:
                             file_bytes = base64.b64decode(b64)
-                            # Deliver extracted raw document to Telegram
                             send_extracted_document_to_chat(chat_id, file_bytes, fname)
                             
-                            # Auto-clean active markup buttons (as requested)
                             keyboard = [[{"text": "⬅️ Back to Files List", "callback_data": f"ext_spec_{mapping_id}"}]]
                             url = f"{TELEGRAM_API}/editMessageText"
                             http_session.post(url, json={
