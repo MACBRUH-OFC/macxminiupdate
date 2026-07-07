@@ -344,8 +344,8 @@ packageTabs.addEventListener("click", (e) => {
         fileList.classList.remove("hidden");
         itemList.classList.add("hidden");
     } else {
-        fileList.classList.add("hidden");
-        itemList.classList.remove("hidden");
+        fileList.classList.remove("hidden");
+        itemList.classList.add("hidden");
     }
 });
 
@@ -517,7 +517,7 @@ extractBtn.onclick = async () => {
         const newCount = data.files.filter(f => f.status === "New").length;
         const modCount = data.files.filter(f => f.status === "Modified").length;
         
-        document.getElementById('webTotalSizeVal').innerText = computeByteScale(data.totalSize);
+        document.getElementById('webTotalSizeVal').innerText = computeByteScale(data.totalSize || 0);
         document.getElementById('webNewFilesVal').innerText = newCount;
         document.getElementById('webModFilesVal').innerText = modCount;
         document.getElementById('webStatBar').classList.remove('hidden');
@@ -667,7 +667,6 @@ function toggleSubFolder(folderId, buttonEl, trayIndex) {
     const folder = document.getElementById(folderId);
     const arrow = buttonEl.querySelector('.fa-chevron-down');
     
-    // Collapse all other expanded subfolders in this specific active tray index first
     const activeTray = document.getElementById(`tray-${trayIndex}`);
     if (activeTray) {
         activeTray.querySelectorAll('[id^="folder-"]').forEach(otherFolder => {
@@ -713,7 +712,6 @@ function selectCompositeAsset(compString, element) {
     document.getElementById('mediaTitle').innerText = comp.name;
     document.getElementById('mediaTypeLabel').innerText = comp.type;
 
-    // Apply visual relation indicator mapping info
     const relationBox = document.getElementById('meshRelationBox');
     const descText = document.getElementById('meshRelationDesc');
     descText.innerText = comp.preview_summary;
@@ -736,7 +734,6 @@ function decodeTextSafe(arrayBuffer) {
         const decoder = new TextDecoder('utf-8');
         return decoder.decode(arrayBuffer);
     } catch(e) {
-        // Fallback ASCII decoding
         const arr = new Uint8Array(arrayBuffer);
         let raw = '';
         for (let i = 0; i < arr.byteLength; i++) {
@@ -798,7 +795,7 @@ function previewCategoryFolder(index, key) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
+                    <canvas id="babylonCategoryCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
         
@@ -842,7 +839,6 @@ function previewCategoryFolder(index, key) {
         mediaBox.innerHTML = configHtml;
     }
     else {
-        // Direct trigger on single items
         const firstAsset = categoryAssets[0];
         const displayName = firstAsset.name || firstAsset.fileName || "unnamed_asset";
         const rawType = firstAsset.type || firstAsset.label || "Unknown";
@@ -897,12 +893,10 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             return;
         }
 
-        // Cache tray payload globally for category previews
         trayDataCache[index] = extractedData;
 
         let sublistHtml = "";
         
-        // 1. Render Composite Assemblies if present
         if (extractedData.composites && extractedData.composites.length > 0) {
             sublistHtml += `
                 <div class="mb-3">
@@ -926,7 +920,6 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             `;
         }
 
-        // 2. Cache tray list internally to draw referenced maps later
         let rawList = extractedData.assets || [];
         currentTraySubAssets = rawList.map(t => ({
             name: t.name || t.fileName || "unnamed_asset",
@@ -936,7 +929,6 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             compositeParts: t.composite_parts || []
         }));
 
-        // 3. Render Collapsible Categories Explorer Folders
         const folders = [
             { key: "3d_models", label: "Geometry & 3D Meshes", icon: "fa-cube" },
             { key: "textures", label: "Textures & Sprite Assets", icon: "fa-image" },
@@ -954,12 +946,10 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             sublistHtml += `
                 <div class="flex flex-col bg-black/30 rounded-xl border border-zinc-900/60 overflow-hidden">
                     <div class="flex items-center justify-between p-2.5 hover:bg-zinc-950 transition-all text-left select-none">
-                        <!-- Folder Preview Trigger: Click title to load category-wide visual workspace -->
                         <div class="flex-1 cursor-pointer flex items-center gap-2" onclick="previewCategoryFolder('${index}', '${f.key}')">
                             <i class="fa-solid ${f.icon} opacity-60 text-yellow-500"></i>
                             <span class="text-[10px] font-bold text-zinc-300">${f.label} (${list.length})</span>
                         </div>
-                        <!-- Folder Expand Trigger: Click chevron to expand sub-asset listings -->
                         <button class="w-6 h-6 flex items-center justify-center text-zinc-600 hover:text-white" onclick="toggleSubFolder('folder-${index}-${f.key}', this, '${index}')">
                             <i class="fa-solid fa-chevron-down text-[8px] transition-transform"></i>
                         </button>
@@ -1053,112 +1043,6 @@ function showFallbackError(errorMessage) {
         </div>`;
 }
 
-function json_parse_clean(str) {
-    try {
-        return JSON.parse(str);
-    } catch (e) {
-        const trimmed = str.trim();
-        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            try {
-                return JSON.parse(trimmed);
-            } catch (err) {}
-        }
-        return null;
-    }
-}
-
-function renderStructuredJSON(jsonObj, ext, label, item) {
-    const isMono = label.toLowerCase().includes('monobehaviour') || label.toLowerCase().includes('scriptableobject') || label.toLowerCase().includes('gamedata');
-    let propertiesHtml = "";
-    
-    if (isMono && jsonObj && typeof jsonObj === 'object' && !Array.isArray(jsonObj)) {
-        const rows = Object.entries(jsonObj).map(([key, val]) => {
-            let valStr = typeof val === 'object' ? JSON.stringify(val) : String(val);
-            if (valStr.length > 120) valStr = valStr.substring(0, 117) + "...";
-            return `
-                <tr class="border-b border-zinc-900 hover:bg-zinc-950/50">
-                    <td class="py-2 pr-4 font-mono text-[10px] text-yellow-500 font-bold select-text">${key}</td>
-                    <td class="py-2 font-mono text-[10px] text-zinc-300 select-text break-all">${valStr.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</td>
-                </tr>`;
-        }).join('');
-        
-        propertiesHtml = `
-            <div class="mb-3 bg-black/60 border border-zinc-900 rounded-xl p-3 text-left">
-                <span class="block text-[8px] font-black text-emerald-400 uppercase tracking-widest mb-2"><i class="fa-solid fa-gears mr-1"></i>Component Properties</span>
-                <div class="max-h-[220px] overflow-y-auto custom-scrollbar">
-                    <table class="w-full text-left border-collapse">
-                        <thead>
-                            <tr class="border-b border-zinc-800 text-zinc-500 text-[8px] font-black uppercase">
-                                <th class="pb-1 pr-4">Property Key</th>
-                                <th class="pb-1">Value</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows || '<tr><td colspan="2" class="text-[9px] text-zinc-500 py-1">No direct properties found</td></tr>'}</tbody>
-                    </table>
-                </div>
-            </div>`;
-    }
-
-    // Dynamic Connection Mapping Logic
-    let connectionHtml = "";
-    let referencedSiblings = [];
-    if (jsonObj && typeof jsonObj === 'object') {
-        const jsonStr = JSON.stringify(jsonObj).toLowerCase();
-        currentTraySubAssets.forEach(sibling => {
-            const sibName = sibling.name.toLowerCase();
-            if (sibName && sibName !== item.name.toLowerCase()) {
-                const baseName = sibName.split('.')[0];
-                if (jsonStr.includes(baseName) && baseName.length > 4) {
-                    referencedSiblings.push(sibling);
-                }
-            }
-        });
-    }
-
-    if (referencedSiblings.length > 0) {
-        const siblingList = referencedSiblings.map(sib => `
-            <div class="flex items-center justify-between p-2 rounded-lg bg-zinc-950/60 border border-zinc-900">
-                <div class="flex items-center gap-2 min-w-0">
-                    <i class="fa-solid fa-link text-yellow-500 text-[10px]"></i>
-                    <div class="min-w-0 text-left">
-                        <span class="block text-[10px] font-bold text-zinc-300 truncate">${sib.name}</span>
-                        <span class="block text-[8px] font-black text-zinc-600 uppercase tracking-wider">${sib.label}</span>
-                    </div>
-                </div>
-                <button onclick="triggerDirectSiblingPreview('${encodeURIComponent(sib.url)}', '${encodeURIComponent(sib.name)}', '${encodeURIComponent(sib.label)}', '${encodeURIComponent(JSON.stringify(sib.associatedTextures))}', '${encodeURIComponent(JSON.stringify(sib.compositeParts))}')" class="px-2.5 py-1 bg-yellow-500 text-black text-[8px] font-black uppercase rounded hover:bg-white transition-all flex items-center gap-1 flex-shrink-0">
-                    <i class="fa-solid fa-eye"></i> View Connection
-                </button>
-            </div>
-        `).join('');
-
-        connectionHtml = `
-            <div class="mb-3 bg-black/60 border border-zinc-900 rounded-xl p-3 text-left">
-                <span class="block text-[8px] font-black text-yellow-500 uppercase tracking-widest mb-2"><i class="fa-solid fa-share-nodes mr-1"></i>Active Data Connections</span>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[160px] overflow-y-auto custom-scrollbar pr-1">${siblingList}</div>
-            </div>`;
-    }
-
-    const prettyJson = JSON.stringify(jsonObj, null, 2);
-    
-    return `
-        <div class="custom-player-wrapper h-full">
-            <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204] overflow-hidden flex flex-col p-3">
-                <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
-                    <span>${isMono ? 'Component Parameter Visualizer' : 'Structured Configuration File'}</span>
-                    <span class="text-zinc-400 font-mono text-[9px]">${ext.toUpperCase()} Config File</span>
-                </div>
-                <div class="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-1 text-left">
-                    ${propertiesHtml}
-                    ${connectionHtml}
-                    <div class="relative bg-black/40 border border-zinc-900/40 rounded p-2">
-                        <span class="absolute right-2 top-2 text-[8px] font-black text-zinc-600 uppercase tracking-wider select-none">Raw Content</span>
-                        <pre class="text-[10px] font-mono text-zinc-400 whitespace-pre-wrap select-text leading-normal">${prettyJson.substring(0, 50000)}</pre>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-}
-
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
 
@@ -1175,7 +1059,8 @@ async function selectFile(item, element) {
     document.getElementById('mediaTitle').innerText = item.name;
     document.getElementById('mediaTypeLabel').innerText = item.label;
 
-    let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
+    // Direct proxy link loading (rather than accessing via cached local dictionary keys)
+    let liveSourceData = item.id || "";
     const ext = item.name.split('.').pop().toLowerCase();
     const lLabel = item.label.toLowerCase();
 
@@ -1188,7 +1073,6 @@ async function selectFile(item, element) {
 
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Multi-criteria checking matches both filename extensions and metadata labels
     const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite') || lLabel.includes('texture2d') || lLabel.includes('image');
     const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video') || lLabel.includes('videoclip');
     const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio') || lLabel.includes('audioclip');
