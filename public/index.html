@@ -555,7 +555,7 @@ function renderList() {
         const row = document.createElement('div');
         row.className = "flex flex-col rounded-xl bg-[#0b0b0f] border border-zinc-900 overflow-hidden min-w-0 mb-1";
 
-        let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+        let badgeColor = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
         if (item.status === "Modified") {
             badgeColor = "bg-amber-500/10 text-amber-400 border border-emerald-500/20";
         }
@@ -783,7 +783,7 @@ function previewCategoryFolder(index, key) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <canvas id="babylonCategoryCanvas" class="babylon-canvas-viewport"></canvas>
+                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
         
@@ -988,7 +988,7 @@ function getIcon(label, filename = "") {
     if(l.includes('spriteatlas') || ext === 'atlas' || filename.includes('.atlas.txt')) return 'fa-boxes-stacked text-amber-400';
     if(l.includes('sprite') || ext === 'png') return 'fa-file-image text-orange-400';
     if(l.includes('audio') || ['ogg','wav','mp3'].includes(ext)) return 'fa-volume-high text-cyan-400';
-    if(l.includes('video') || ['mp4','mkv','webm','avi','mov'].includes(ext)) return 'fa-play-circle text-red-500';
+    if(l.includes('video') || ['mp4','mkv','webm'].includes(ext)) return 'fa-play-circle text-red-500';
     if(l.includes('mesh') || ext === 'obj') return 'fa-cube text-purple-400';
     if(l.includes('gameobject')) return 'fa-sitemap text-blue-400';
     if(l.includes('monobehaviour') || l.includes('scriptableobject')) return 'fa-gear text-emerald-400';
@@ -1023,6 +1023,19 @@ function getHexDump(arrayBuffer) {
         hexLines.push(`... [Showing first 4KB of ${view.byteLength} bytes] ...`);
     }
     return hexLines.join('\n');
+}
+
+function showFallbackError(errorMessage) {
+    const mediaBox = document.getElementById('mediaBox');
+    mediaBox.innerHTML = `
+        <div class="custom-player-wrapper h-full">
+            <div class="aspect-16-9-viewport full-viewport-mesh text-zinc-500 font-mono text-[10px] p-4 text-center flex flex-col justify-center items-center gap-2 bg-[#020204]">
+                <i class="fa-solid fa-triangle-exclamation text-xl text-red-500 animate-pulse"></i>
+                <span class="text-zinc-300 font-bold">Failed to load preview</span>
+                <span class="text-[9px] text-zinc-500 max-w-[240px]">${errorMessage}</span>
+                <span class="text-[9px] text-zinc-600 mt-2">You can still download the asset directly using the button below.</span>
+            </div>
+        </div>`;
 }
 
 function json_parse_clean(str) {
@@ -1151,344 +1164,185 @@ window.triggerDirectSiblingPreview = function(encodedUrl, encodedName, encodedLa
 
 async function selectFile(item, element) {
     cleanPreviousMediaTracks();
+
     currentPreviewRequestId++;
     const requestId = currentPreviewRequestId;
 
-    if (element) {
-        document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
-        element.classList.add('bg-zinc-900', 'text-white');
-    }
+    document.querySelectorAll('.sub-asset-row').forEach(el => el.classList.remove('bg-zinc-900', 'text-white'));
+    if(element) element.classList.add('bg-zinc-900', 'text-white');
 
     document.getElementById('previewFallback').classList.add('hidden');
     document.getElementById('previewContent').classList.remove('hidden');
 
     const mediaBox = document.getElementById('mediaBox');
-    const mediaTitle = document.getElementById('mediaTitle');
-    const mediaTypeLabel = document.getElementById('mediaTypeLabel');
+    document.getElementById('mediaTitle').innerText = item.name;
+    document.getElementById('mediaTypeLabel').innerText = item.label;
+
+    let liveSourceData = offlineDataPayloadSessionCache[item.id] || "";
+    const ext = item.name.split('.').pop().toLowerCase();
+    const lLabel = item.label.toLowerCase();
+
     const saveBtn = document.getElementById('singleSaveBtn');
+    saveBtn.href = liveSourceData;
+    saveBtn.setAttribute('download', item.name);
 
-    // Decode URI elements safely
-    let id = item.id ? decodeURIComponent(item.id) : "";
-    let url = item.url ? decodeURIComponent(item.url) : "";
-    let name = item.name ? decodeURIComponent(item.name) : (item.fileName ? decodeURIComponent(item.fileName) : "Loading...");
-    let label = item.label ? decodeURIComponent(item.label) : "Processing...";
+    mediaBox.innerHTML = `
+        <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
 
-    mediaTitle.innerText = name;
-    mediaTypeLabel.innerText = label;
+    document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    const ext = name.split('.').pop().toLowerCase();
-    const lLabel = label.toLowerCase();
+    const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite');
+    const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video');
+    const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio');
+    const isBinary = ['bin','bytes','dat','bundle','so','dll','apk','assets','db'].includes(ext) || lLabel.includes('binary') || lLabel.includes('bytes');
 
-    // Check if the target item is a standard bundle that requires extraction
-    const isBundle = ext === 'bundle' || ext === 'unity3d' || lLabel.includes('bundle') || lLabel.includes('package');
+    if (requestId !== currentPreviewRequestId) return;
 
-    if (isBundle) {
-        // Show loading spinner
+    if (ext === 'obj' || lLabel.includes('mesh')) {
         mediaBox.innerHTML = `
-            <div class="flex items-center justify-center h-full">
-                <div class="text-center">
-                    <i class="fa-solid fa-circle-notch fa-spin text-yellow-500 text-4xl mb-4"></i>
-                    <p class="text-zinc-400 text-sm">Extracting bundle contents...</p>
+            <div class="custom-player-wrapper h-full">
+                <div class="aspect-16-9-viewport full-viewport-mesh">
+                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
-
-        document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-        try {
-            // Call /api/process to extract the bundle
-            const processUrl = `/api/process?bundle_url=${encodeURIComponent(id || url)}`;
-            const processResponse = await fetch(processUrl);
-            
-            if (!processResponse.ok) {
-                if (requestId === currentPreviewRequestId) {
-                    showFallbackError(`Failed to extract: HTTP ${processResponse.status}`);
-                }
-                return;
-            }
-
-            const extractedData = await processResponse.json();
-
-            if (requestId !== currentPreviewRequestId) return;
-
-            if (!extractedData.success) {
-                showFallbackError(extractedData.message || "Failed to extract bundle");
-                return;
-            }
-
-            // Cache the extracted data
-            offlineDataPayloadSessionCache[id || url] = extractedData;
-
-            // Display the extracted categories
-            if (extractedData.categories && Object.keys(extractedData.categories).length > 0) {
-                displayExtractedAssets(extractedData, requestId);
-            } else if (extractedData.composites && extractedData.composites.length > 0) {
-                // Show composites if available
-                displayComposites(extractedData.composites, requestId);
-            } else {
-                showFallbackError("No assets extracted from bundle");
-            }
-
-        } catch (error) {
-            if (requestId === currentPreviewRequestId) {
-                showFallbackError(`Error: ${error.message}`);
-            }
-            console.error('selectFile error:', error);
+        
+        const relationBox = document.getElementById('meshRelationBox');
+        const descText = document.getElementById('meshRelationDesc');
+        
+        const countParts = (item.compositeParts ? item.compositeParts.length : 0);
+        const countTex = (item.associatedTextures ? item.associatedTextures.length : 0);
+        
+        if (countParts > 0 || countTex > 0) {
+            descText.innerText = `Assembling model utilizing ${countParts + 1} segmented mesh parts mapped concurrently with ${countTex} matched texture layer paths.`;
+            relationBox.classList.remove('hidden');
+        } else {
+            relationBox.classList.add('hidden');
         }
-    } else {
-        // Render single extracted asset within viewport using original viewer implementations
-        let liveSourceData = offlineDataPayloadSessionCache[id || url] || id || url || "";
-        saveBtn.href = liveSourceData;
-        saveBtn.setAttribute('download', name);
 
-        mediaBox.innerHTML = `
-            <div class="custom-player-wrapper h-full"><div class="aspect-16-9-viewport full-viewport-mesh"><i class="fa-solid fa-circle-notch fa-spin text-zinc-800 text-lg"></i></div></div>`;
-
-        document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-        const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite');
-        const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video');
-        const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio');
-        const isBinary = ['bin','bytes','dat','so','dll','apk','assets','db'].includes(ext) || lLabel.includes('binary') || lLabel.includes('bytes');
-
-        if (requestId !== currentPreviewRequestId) return;
-
-        if (ext === 'obj' || lLabel.includes('mesh')) {
+        initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name, item.associatedTextures || [], item.compositeParts || []);
+    } 
+    else {
+        document.getElementById('meshRelationBox').classList.add('hidden');
+        
+        if (isImage) {
             mediaBox.innerHTML = `
                 <div class="custom-player-wrapper h-full">
                     <div class="aspect-16-9-viewport full-viewport-mesh">
-                        <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
+                        <img src="${liveSourceData}" class="pixelated-render">
                     </div>
                 </div>`;
-            
-            const relationBox = document.getElementById('meshRelationBox');
-            const descText = document.getElementById('meshRelationDesc');
-            
-            const countParts = (item.compositeParts ? item.compositeParts.length : 0);
-            const countTex = (item.associatedTextures ? item.associatedTextures.length : 0);
-            
-            if (countParts > 0 || countTex > 0) {
-                descText.innerText = `Assembling model utilizing ${countParts + 1} segmented mesh parts mapped concurrently with ${countTex} matched texture layer paths.`;
-                relationBox.classList.remove('hidden');
-            } else {
-                relationBox.classList.add('hidden');
+        } 
+        else if (isVideo) {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper relative">
+                    <div class="aspect-16-9-viewport relative">
+                        <div id="videoCenterOverlay" class="center-play-overlay">
+                            <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                        </div>
+                        <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
+                    </div>
+                    <div class="custom-control-bar">
+                        <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                        <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                                <i class="fa-solid fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            initCustomVideoController();
+        } 
+        else if (isAudio) {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper relative">
+                    <div class="aspect-16-9-viewport relative">
+                        <div id="audioCenterOverlay" class="center-play-overlay">
+                            <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
+                        </div>
+                        <canvas id="audioVisualizerCanvas"></canvas>
+                        <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
+                    </div>
+                    <div class="custom-control-bar">
+                        <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
+                        <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
+                                <i class="fa-solid fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            initCustomAudioController();
+        } 
+        else if (isBinary) {
+            mediaBox.innerHTML = `
+                <div class="custom-player-wrapper h-full">
+                    <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
+                        <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
+                            <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
+                                <span>Hexadecimal representation (First 4KB)</span>
+                                <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
+                            </div>
+                            <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
+                        </div>
+                    </div>
+                </div>`;
+            try {
+                const rawResponse = await fetch(liveSourceData);
+                if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
+                const arrayBuffer = await rawResponse.arrayBuffer();
+                if (requestId !== currentPreviewRequestId) return;
+                document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
+                const hexDump = getHexDump(arrayBuffer);
+                document.getElementById('hexDumpContainer').textContent = hexDump;
+            } catch (e) {
+                if (requestId === currentPreviewRequestId) showFallbackError(e.message);
             }
-
-            initBabylonMeshScene("babylonAssetCanvas", liveSourceData, name, item.associatedTextures || [], item.compositeParts || []);
         } 
         else {
-            document.getElementById('meshRelationBox').classList.add('hidden');
-            
-            if (isImage) {
-                mediaBox.innerHTML = `
-                    <div class="custom-player-wrapper h-full">
-                        <div class="aspect-16-9-viewport full-viewport-mesh">
-                            <img src="${liveSourceData}" class="pixelated-render">
-                        </div>
-                    </div>`;
-            } 
-            else if (isVideo) {
-                mediaBox.innerHTML = `
-                    <div class="custom-player-wrapper relative">
-                        <div class="aspect-16-9-viewport relative">
-                            <div id="videoCenterOverlay" class="center-play-overlay">
-                                <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
-                            </div>
-                            <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
-                        </div>
-                        <div class="custom-control-bar">
-                            <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                            <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                            <div class="flex items-center gap-2 flex-shrink-0">
-                                <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                                    <i class="fa-solid fa-play"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>`;
-                initCustomVideoController();
-            } 
-            else if (isAudio) {
-                mediaBox.innerHTML = `
-                    <div class="custom-player-wrapper relative">
-                        <div class="aspect-16-9-viewport relative">
-                            <div id="audioCenterOverlay" class="center-play-overlay">
-                                <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
-                            </div>
-                            <canvas id="audioVisualizerCanvas"></canvas>
-                            <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
-                        </div>
-                        <div class="custom-control-bar">
-                            <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                            <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                            <div class="flex items-center gap-2 flex-shrink-0">
-                                <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                                    <i class="fa-solid fa-play"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>`;
-                initCustomAudioController();
-            } 
-            else if (isBinary) {
-                mediaBox.innerHTML = `
-                    <div class="custom-player-wrapper h-full">
-                        <div class="aspect-16-9-viewport full-viewport-mesh bg-[#020204]">
-                            <div class="flex flex-col w-full h-full p-3 overflow-hidden text-left">
-                                <div class="text-[10px] font-black text-zinc-500 mb-2 uppercase border-b border-zinc-900 pb-1 flex justify-between items-center flex-shrink-0">
-                                    <span>Hexadecimal representation (First 4KB)</span>
-                                    <span id="binarySizeLabel" class="text-zinc-400">Reading...</span>
-                                </div>
-                                <pre id="hexDumpContainer" class="text-[10px] font-mono text-emerald-500/80 w-full h-full overflow-auto select-text custom-scrollbar whitespace-pre leading-normal bg-black/40 p-2 rounded border border-zinc-900/40"></pre>
-                            </div>
-                        </div>
-                    </div>`;
-                try {
-                    const rawResponse = await fetch(liveSourceData);
-                    if (!rawResponse.ok) throw new Error("Network stream failure: Status " + rawResponse.status);
-                    const arrayBuffer = await rawResponse.arrayBuffer();
-                    if (requestId !== currentPreviewRequestId) return;
-                    document.getElementById('binarySizeLabel').innerText = `Total Size: ${computeByteScale(arrayBuffer.byteLength)}`;
-                    const hexDump = getHexDump(arrayBuffer);
-                    document.getElementById('hexDumpContainer').textContent = hexDump;
-                } catch (e) {
-                    if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+            try {
+                let processedTextString = "";
+                let isJsonParsed = false;
+                let parsedJson = null;
+
+                if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
+                    const parts = liveSourceData.split(',');
+                    processedTextString = atob(parts[1]);
+                } else {
+                    const rawTextResponse = await fetch(liveSourceData);
+                    if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
+                    processedTextString = await rawTextResponse.text();
                 }
-            } 
-            else {
-                try {
-                    let processedTextString = "";
-                    let isJsonParsed = false;
-                    let parsedJson = null;
 
-                    if (liveSourceData.startsWith('data:') || liveSourceData.includes('base64,')) {
-                        const parts = liveSourceData.split(',');
-                        processedTextString = atob(parts[1]);
-                    } else {
-                        const rawTextResponse = await fetch(liveSourceData);
-                        if (!rawTextResponse.ok) throw new Error("Network stream failure: Status " + rawTextResponse.status);
-                        processedTextString = await rawTextResponse.text();
-                    }
+                if (requestId !== currentPreviewRequestId) return;
 
-                    if (requestId !== currentPreviewRequestId) return;
-
-                    // Stop loop routing fallback HTML documents from loading
-                    const sanitizedCheck = processedTextString.trim().toLowerCase();
-                    if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
-                        throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset file data.");
-                    }
-
-                    try {
-                        parsedJson = json_parse_clean(processedTextString);
-                        if (parsedJson) isJsonParsed = true;
-                    } catch(e) {}
-
-                    if (isJsonParsed && parsedJson) {
-                        mediaBox.innerHTML = renderStructuredJSON(parsedJson, ext, label, item);
-                    } else {
-                        mediaBox.innerHTML = `
-                            <div class="custom-player-wrapper h-full">
-                                <div class="aspect-16-9-viewport full-viewport-mesh">
-                                    <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
-                                </div>
-                            </div>`;
-                    }
-                } catch (e) {
-                    if (requestId === currentPreviewRequestId) showFallbackError(e.message);
+                // Stop loop routing fallback HTML documents from loading
+                const sanitizedCheck = processedTextString.trim().toLowerCase();
+                if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
+                    throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset file data.");
                 }
+
+                try {
+                    parsedJson = json_parse_clean(processedTextString);
+                    if (parsedJson) isJsonParsed = true;
+                } catch(e) {}
+
+                if (isJsonParsed && parsedJson) {
+                    mediaBox.innerHTML = renderStructuredJSON(parsedJson, ext, item.label, item);
+                } else {
+                    mediaBox.innerHTML = `
+                        <div class="custom-player-wrapper h-full">
+                            <div class="aspect-16-9-viewport full-viewport-mesh">
+                                <pre class="text-[10px] font-mono text-zinc-400 p-4 w-full h-full overflow-auto text-left whitespace-pre-wrap select-text custom-scrollbar bg-[#020204] border border-zinc-900/60 rounded-lg">${processedTextString.slice(0, 35000)}</pre>
+                            </div>
+                        </div>`;
+                }
+            } catch (e) {
+                if (requestId === currentPreviewRequestId) showFallbackError(e.message);
             }
         }
     }
-}
-
-function displayExtractedAssets(extractedData, requestId) {
-    if (requestId !== currentPreviewRequestId) return;
-
-    const mediaBox = document.getElementById('mediaBox');
-    let html = `<div class="space-y-2 overflow-y-auto custom-scrollbar p-2 h-full w-full">`;
-
-    // Display composites
-    if (extractedData.composites && extractedData.composites.length > 0) {
-        html += `<div class="text-xs font-bold text-yellow-500 mb-2 uppercase">🎨 3D Assemblies</div>`;
-        extractedData.composites.forEach(comp => {
-            html += `
-                <div class="p-2 bg-black/40 border border-yellow-500/20 rounded cursor-pointer hover:border-yellow-500/50" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
-                    <div class="text-[10px] font-bold text-yellow-400">${comp.name}</div>
-                    <div class="text-[8px] text-zinc-500">${comp.type}</div>
-                </div>
-            `;
-        });
-        html += `<hr class="border-zinc-800 my-2">`;
-    }
-
-    // Display asset categories
-    const categories = [
-        { key: "3d_models", label: "3D Models", icon: "fa-cube" },
-        { key: "textures", label: "Textures", icon: "fa-image" },
-        { key: "materials", label: "Materials", icon: "fa-wand-magic-sparkles" },
-        { key: "animations", label: "Animations", icon: "fa-person-running" },
-        { key: "configs", label: "Configs", icon: "fa-gear" },
-        { key: "others", label: "Others", icon: "fa-file" }
-    ];
-
-    categories.forEach(cat => {
-        const assets = extractedData.categories[cat.key] || [];
-        if (assets.length === 0) return;
-
-        html += `<div class="text-xs font-bold text-emerald-400 mb-1 uppercase mt-2 text-left"><i class="fa-solid ${cat.icon} mr-1"></i>${cat.label} (${assets.length})</div>`;
-        
-        assets.forEach((asset, idx) => {
-            const fname = asset.fileName || asset.name || `asset_${idx}`;
-            const shortName = fname.split('/').pop().substring(0, 30);
-            
-            if (cat.key === 'textures') {
-                html += `
-                    <div class="p-1.5 bg-black/40 border border-zinc-800 rounded cursor-pointer hover:border-emerald-500/50 mb-1" onclick="selectFile({id: '${encodeURIComponent(asset.url)}', name: '${encodeURIComponent(fname)}', label: 'TEXTURE', url: '${encodeURIComponent(asset.url)}', associatedTextures: ${JSON.stringify(asset.associated_textures || [])}, compositeParts: ${JSON.stringify(asset.composite_parts || [])}}, this)">
-                        <img src="${asset.url}" class="w-full h-12 object-cover rounded mb-1 bg-[#09090d]">
-                        <div class="text-[8px] text-zinc-400 truncate text-left">${shortName}</div>
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div class="p-1.5 bg-black/40 border border-zinc-800 rounded cursor-pointer hover:border-emerald-500/50 mb-1 text-left" onclick="selectFile({id: '${encodeURIComponent(asset.url)}', name: '${encodeURIComponent(fname)}', label: '${cat.key.toUpperCase()}', url: '${encodeURIComponent(asset.url)}', associatedTextures: ${JSON.stringify(asset.associated_textures || [])}, compositeParts: ${JSON.stringify(asset.composite_parts || [])}}, this)">
-                        <div class="text-[8px] font-mono text-zinc-400 truncate">${shortName}</div>
-                    </div>
-                `;
-            }
-        });
-    });
-
-    html += `</div>`;
-    mediaBox.innerHTML = html;
-}
-
-function displayComposites(composites, requestId) {
-    if (requestId !== currentPreviewRequestId) return;
-
-    const mediaBox = document.getElementById('mediaBox');
-    let html = `<div class="space-y-2 overflow-y-auto custom-scrollbar p-2 h-full w-full">`;
-
-    composites.forEach(comp => {
-        html += `
-            <div class="p-2 bg-black/60 border border-yellow-500/20 rounded cursor-pointer hover:border-yellow-500/50 text-left" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
-                <div class="text-[10px] font-bold text-yellow-400 mb-1">${comp.name}</div>
-                <div class="text-[8px] text-zinc-500">${comp.type}</div>
-                <div class="text-[8px] text-zinc-600 mt-1">${comp.preview_summary}</div>
-            </div>
-        `;
-    });
-
-    html += `</div>`;
-    mediaBox.innerHTML = html;
-}
-
-function showFallbackError(message) {
-    const mediaBox = document.getElementById('mediaBox');
-    mediaBox.innerHTML = `
-        <div class="flex flex-col items-center justify-center h-full text-center">
-            <i class="fa-solid fa-triangle-exclamation text-red-500 text-4xl mb-3"></i>
-            <p class="text-red-400 text-sm font-bold">${message}</p>
-            <p class="text-zinc-500 text-xs mt-2">Check the browser console for details</p>
-        </div>`;
 }
 
 function interceptDownloadZip(e, encodedUrl) {
@@ -1558,62 +1412,10 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
 
     function setupMeshTextures(material, textures) {
         if (textures && textures.length > 0) {
-            let diffuseTexUrl = null;
-            let normalTexUrl = null;
-            let specularTexUrl = null;
-            let metallicTexUrl = null;
-
-            textures.forEach(texObj => {
-                let urlStr = typeof texObj === 'object' ? texObj.url : texObj;
-                let fileStr = (typeof texObj === 'object' ? texObj.fileName : texObj).toLowerCase();
-
-                // Delineate channels by semantic texture suffixes
-                if (fileStr.includes('_d.') || fileStr.includes('_d_') || fileStr.includes('diffuse') || fileStr.includes('albedo') || fileStr.includes('color') || fileStr.includes('basecolor') || fileStr.includes('_d_png')) {
-                    diffuseTexUrl = urlStr;
-                }
-                else if (fileStr.includes('_n.') || fileStr.includes('_n_') || fileStr.includes('normal') || fileStr.includes('bump')) {
-                    normalTexUrl = urlStr;
-                }
-                else if (fileStr.includes('_s.') || fileStr.includes('_s_') || fileStr.includes('specular') || fileStr.includes('gloss')) {
-                    specularTexUrl = urlStr;
-                }
-                else if (fileStr.includes('_m.') || fileStr.includes('_m_') || fileStr.includes('metallic') || fileStr.includes('metalness')) {
-                    metallicTexUrl = urlStr;
-                }
-                else {
-                    if (!diffuseTexUrl) diffuseTexUrl = urlStr;
-                }
-            });
-
-            // Default fallback albedo diffuse if no match was determined
-            if (!diffuseTexUrl) {
-                diffuseTexUrl = typeof textures[0] === 'object' ? textures[0].url : textures[0];
-            }
-
-            // Bind Albedo diffuse
-            if (diffuseTexUrl) {
-                const diffTex = new BABYLON.Texture(diffuseTexUrl, babylonScene);
-                diffTex.hasAlpha = true;
-                material.diffuseTexture = diffTex;
-                material.diffuseColor = new BABYLON.Color3(1, 1, 1);
-            }
-
-            // Bind depth normal bump mapping
-            if (normalTexUrl) {
-                const normTex = new BABYLON.Texture(normalTexUrl, babylonScene);
-                material.bumpTexture = normTex;
-                material.invertNormalMapX = true;
-                material.invertNormalMapY = true;
-            }
-
-            // Bind Specular highlight map
-            if (specularTexUrl) {
-                const specTex = new BABYLON.Texture(specularTexUrl, babylonScene);
-                material.specularTexture = specTex;
-            } else {
-                material.specularColor = new BABYLON.Color3(0.15, 0.15, 0.15);
-            }
-            material.specularPower = 64;
+            const tex = new BABYLON.Texture(textures[0], babylonScene);
+            tex.hasAlpha = true;
+            material.diffuseTexture = tex;
+            material.specularColor = new BABYLON.Color3(0.15, 0.15, 0.15);
         } else {
             material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.55);
             material.specularColor = new BABYLON.Color3(0.8, 0.8, 0.8);

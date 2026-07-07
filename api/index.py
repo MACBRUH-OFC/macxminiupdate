@@ -10,15 +10,7 @@ import zipfile
 import requests
 import hashlib
 import concurrent.futures
-from datetime import datetime
 from flask import Flask, jsonify, request, Response
-from flask_cors import CORS
-
-try:
-    from PIL import Image
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
 
 # Web configuration
 BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
@@ -35,16 +27,6 @@ OWNER_ID = 1745313119
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 app = Flask(__name__)
-
-# Enable CORS for all routes
-CORS(app, 
-     resources={r"/*": {
-         "origins": ["*"],
-         "methods": ["GET", "POST", "OPTIONS"],
-         "allow_headers": ["Content-Type", "Authorization"],
-         "expose_headers": ["Content-Type"],
-         "max_age": 3600
-     }})
 
 # Connection pooling with high limits for faster processing
 http_session = requests.Session()
@@ -183,7 +165,7 @@ def get_multiple_file_info_data(versions):
     return results
 
 def find_latest_active_version(requested_version):
-    """Scans requested and next version parameters concurrently."""
+    """Scans the requested version as well as the next 3 versions in parallel on the web, with downward tracing fallback."""
     candidates = [requested_version]
     for step in [1, 2, 3]:
         nxt = get_next_version(requested_version, step)
@@ -391,121 +373,11 @@ def extract_new_game_items(active_version, new_text):
             })
     return grouped_items
 
-def latest_version_logic():
-    try:
-        res = http_session.get(VERSION_API, timeout=5)
-        data = res.json()
-        if data.get("success") and "remote_version" in data:
-            base_ver = data["remote_version"]
-            candidates = [base_ver]
-            for step in [1, 2, 3]:
-                nxt = get_next_version(base_ver, step)
-                if nxt:
-                    candidates.append(nxt)
-            fetched_maps = get_multiple_file_info_data(candidates)
-            active_ver = base_ver
-            for cand in reversed(candidates):
-                if cand in fetched_maps:
-                    active_ver = cand
-                    break
-            target_ver = get_next_version(active_ver, 1)
-            return jsonify({
-                "success": True, 
-                "current_version": active_ver, 
-                "target_version": target_ver
-            })
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    return jsonify({"success": False, "message": "Failed response lookup."}), 500
-
-def check_update_logic():
-    input_val = request.args.get('version', '').strip()
-    if not input_val:
-        return jsonify({"success": False, "message": "Missing criteria parameters"}), 400
-    if "http" in input_val:
-        match = re.search(r'/android/(\d+\.\d+\.\d+)/', input_val)
-        version = match.group(1) if match else None
-    else:
-        version = input_val
-    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return jsonify({"success": False, "message": "Incorrect version format entered"}), 400
-
-    new_text, active_version, base_url = get_file_info_data_exact(version)
-    if not new_text:
-        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
-        
-    prev_versions = []
-    current_temp = active_version
-    for _ in range(6):
-        prev_ver = get_previous_version(current_temp)
-        if not prev_ver: break
-        prev_versions.append(prev_ver)
-        current_temp = prev_ver
-        
-    fetched_maps_prev = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps_prev[v][0] for v in prev_versions if v in fetched_maps_prev]
-    old_files_map = {}
-    for old_text in reversed(old_texts):
-        for line in old_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 3:
-                file_id = parts[0].strip()
-                try: size = int(parts[2])
-                except Exception: size = 0
-                old_files_map[file_id] = size
-    file_infos = []
-    total_size = 0
-    for line in new_text.splitlines():
-        if not line.strip(): continue
-        parts = line.split(',')
-        if len(parts) < 5: continue
-        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
-        if not file_id or not suffix: continue
-        try: size = int(size_str)
-        except Exception: size = 0
-        if file_id in old_files_map:
-            if old_files_map[file_id] != size: status = "Modified"
-            else: continue
-        else:
-            status = "New"
-        encoded = encode_suffix(suffix)
-        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
-        file_name = file_id.split('/')[-1]
-        token = encode_token(download_url, file_name, 'application/octet-stream')
-        proxy_url = f"/api?action=stream&token={token}"
-        total_size += size
-        file_infos.append({
-            "fileName": file_id,
-            "size": size,
-            "url": proxy_url,
-            "status": status
-        })
-    new_items = []
-    try:
-        new_items = extract_new_game_items(active_version, new_text)
-    except Exception as e:
-        print(f"Error parsing game items hotfix: {e}")
-    return jsonify({
-        "success": True,
-        "version": active_version,
-        "totalSize": total_size,
-        "files": file_infos,
-        "new_items": new_items
-    })
-
 def check_name_similarity(name1, name2):
-    """Check name similarity across models and textures with standard suffix handling"""
+    """Normalized token alignment index mapping mesh names with texture assets safely."""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
     n2 = re.sub(r'[\W_]+', ' ', name2).lower().strip()
     
-    # Strip common suffix identifiers to check true base name mappings
-    base1 = re.sub(r'\s+(d|n|s|m|albedo|normal|specular|metallic|metal|roughness|ao|color|diffuse)$', '', n1)
-    base2 = re.sub(r'\s+(d|n|s|m|albedo|normal|specular|metallic|metal|roughness|ao|color|diffuse)$', '', n2)
-    
-    if base1 == base2 or base1 in base2 or base2 in base1:
-        return True
-        
     tokens1 = set(t for t in n1.split() if len(t) > 2)
     tokens2 = set(t for t in n2.split() if len(t) > 2)
     
@@ -516,17 +388,17 @@ def check_name_similarity(name1, name2):
     overlap = t1_clean.intersection(t2_clean)
     if overlap:
         return True
-    
+        
     clean_n1 = "".join(list(t1_clean))
     clean_n2 = "".join(list(t2_clean))
     if clean_n1 and clean_n2:
         if clean_n1 in clean_n2 or clean_n2 in clean_n1:
             return True
-    
+            
     return False
 
 def find_references_in_json(obj, asset_names):
-    """Find references in JSON"""
+    """Recursively scans parsed JSON object values for references to other files inside the bundle."""
     referenced = []
     strings = []
     
@@ -539,7 +411,7 @@ def find_references_in_json(obj, asset_names):
         elif isinstance(v, list):
             for item in v:
                 extract_strings(item)
-    
+                
     extract_strings(obj)
     
     for name in asset_names:
@@ -549,112 +421,7 @@ def find_references_in_json(obj, asset_names):
                 if base_name in s:
                     referenced.append(name)
                     break
-    
     return referenced
-
-def get_texture_base_and_type(filename):
-    """Extracts base filename prefix and type suffix (rgb or sa) cleanly"""
-    fname_lower, ext = os.path.splitext(filename.lower())
-    if fname_lower.endswith('_sa'):
-        return fname_lower[:-3], 'sa', ext
-    elif fname_lower.endswith('_rgb'):
-        return fname_lower[:-4], 'rgb', ext
-    elif fname_lower.endswith('_sg'):
-        return fname_lower[:-3], 'sa', ext  # Treat smoothness/specular/alpha (sg) same as sa
-    return fname_lower, 'main', ext
-
-def merge_rgb_and_sa(rgb_bytes, sa_bytes):
-    """Combines RGB diffuse and SA textures into a single RGBA PNG using PIL"""
-    try:
-        rgb_img = Image.open(io.BytesIO(rgb_bytes)).convert("RGB")
-        sa_img = Image.open(io.BytesIO(sa_bytes)).convert("L")
-        
-        if rgb_img.size != sa_img.size:
-            sa_img = sa_img.resize(rgb_img.size, Image.Resampling.LANCZOS)
-        
-        rgba_img = rgb_img.copy()
-        rgba_img.putalpha(sa_img)
-        
-        output = io.BytesIO()
-        rgba_img.save(output, format="PNG")
-        return output.getvalue()
-    except Exception as e:
-        print(f"Error merging RGB and SA textures: {e}")
-        return None
-
-def trigger_sa_rgb_merges(processed_assets, textures, categories):
-    """Identifies and blends RGB & SA texture assets into single RGBA cache files"""
-    textures_by_name = {t["fileName"].lower(): t for t in textures}
-    sa_pairs = []
-    
-    for t in textures:
-        base, t_type, ext = get_texture_base_and_type(t["fileName"])
-        key = (base, ext)
-        if t_type == 'sa':
-            # Target can be either base + '_rgb' + ext or just base + ext
-            possible_targets = [base + '_rgb' + ext, base + ext]
-            for p_target in possible_targets:
-                if p_target in textures_by_name:
-                    rgb_asset = textures_by_name[p_target]
-                    sa_pairs.append((rgb_asset, t))
-                    break
-                
-    for rgb_asset, sa_asset in sa_pairs:
-        try:
-            rgb_key = rgb_asset["url"].split("token=")[-1]
-            if "&file=" in rgb_key:
-                rgb_key = rgb_key.split("&file=")[0]
-                
-            rgb_bytes = rgb_asset.get("_file_bytes")
-            if not rgb_bytes and rgb_key in MEMORY_ASSET_CACHE:
-                rgb_bytes = MEMORY_ASSET_CACHE[rgb_key]["content"]
-                
-            sa_key = sa_asset["url"].split("token=")[-1]
-            if "&file=" in sa_key:
-                sa_key = sa_key.split("&file=")[0]
-                
-            sa_bytes = sa_asset.get("_file_bytes")
-            if not sa_bytes and sa_key in MEMORY_ASSET_CACHE:
-                sa_bytes = MEMORY_ASSET_CACHE[sa_key]["content"]
-                
-            if not rgb_bytes:
-                decoded_rgb = decode_token(rgb_key)
-                if decoded_rgb and decoded_rgb.get("url"):
-                    res = http_session.get(decoded_rgb["url"], timeout=10)
-                    if res.status_code == 200:
-                        rgb_bytes = res.content
-            if not sa_bytes:
-                decoded_sa = decode_token(sa_key)
-                if decoded_sa and decoded_sa.get("url"):
-                    res = http_session.get(decoded_sa["url"], timeout=10)
-                    if res.status_code == 200:
-                        sa_bytes = res.content
-                        
-            if rgb_bytes and sa_bytes:
-                merged_bytes = merge_rgb_and_sa(rgb_bytes, sa_bytes)
-                if merged_bytes:
-                    base, _, ext = get_texture_base_and_type(rgb_asset["fileName"])
-                    new_filename = base.upper() + ext if rgb_asset["fileName"].isupper() else base + ext
-                    
-                    MEMORY_ASSET_CACHE[rgb_key] = {
-                        "content": merged_bytes,
-                        "filename": new_filename,
-                        "content_type": "image/png"
-                    }
-                    
-                    rgb_asset["fileName"] = new_filename
-                    rgb_asset["_file_bytes"] = merged_bytes
-                    rgb_asset["preview_url"] = f"/api?action=stream&token={rgb_key}&file={new_filename}"
-                    rgb_asset["url"] = f"/api?action=stream&token={rgb_key}&file={new_filename}"
-                    
-                    if sa_asset in processed_assets:
-                        processed_assets.remove(sa_asset)
-                    if sa_asset in textures:
-                        textures.remove(sa_asset)
-                    if sa_asset in categories.get("textures", []):
-                        categories["textures"].remove(sa_asset)
-        except Exception as e:
-            print(f"Failed blending pair: {e}")
 
 def handle_extractor_response(response):
     if not response.ok:
@@ -667,10 +434,16 @@ def handle_extractor_response(response):
     except Exception as e:
         return jsonify({"success": False, "message": f"Invalid JSON returned from extractor: {str(e)}"}), 500
 
-    assets_list = extractor_data.get("assets", []) or extractor_data.get("files", [])
+    assets_list = (
+        extractor_data.get("assets") or 
+        extractor_data.get("files") or 
+        extractor_data.get("extracted") or 
+        extractor_data.get("data")
+    )
     if not isinstance(assets_list, list):
         assets_list = []
-        
+    
+    # Process structured metadata files safely first
     processed_assets = []
     for asset in assets_list:
         filename_str = asset.get("name") or asset.get("fileName") or "extracted_file"
@@ -689,7 +462,7 @@ def handle_extractor_response(response):
                         break
                     except Exception:
                         pass
-        
+
         file_bytes = b""
         if structured_data is not None:
             try:
@@ -705,7 +478,7 @@ def handle_extractor_response(response):
                     file_bytes = base64.b64decode(raw_val)
                 except Exception:
                     file_bytes = raw_val.encode('utf-8')
-        
+
         remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
         if not remote_preview_url:
             if not file_bytes:
@@ -713,37 +486,36 @@ def handle_extractor_response(response):
                 detected_content_type = "application/json"
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
-        
+
         local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
         
-        if file_bytes:
-            MEMORY_ASSET_CACHE[cache_key] = {
-                "content": file_bytes,
-                "filename": filename_str,
-                "content_type": detected_content_type
-            }
+        global MEMORY_ASSET_CACHE
+        MEMORY_ASSET_CACHE[cache_key] = {
+            "content": file_bytes,
+            "filename": filename_str,
+            "content_type": detected_content_type
+        }
         
-        local_proxy_route = f"/api?action=stream&token={local_cache_token}&file={filename_str}"
+        local_proxy_route = f"/api?action=stream&token={local_cache_token}"
         asset["preview_url"] = local_proxy_route
         asset["url"] = local_proxy_route
         asset["fileName"] = filename_str
         asset["label"] = detected_content_type
-        asset["_file_bytes"] = file_bytes
         processed_assets.append(asset)
-    
+
+    # Separate assets by visual groups to scan data reference connections
     meshes = [a for a in processed_assets if a["fileName"].lower().endswith(".obj")]
     textures = [a for a in processed_assets if any(a["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
     materials = [a for a in processed_assets if "material" in a["fileName"].lower() or "material" in (a.get("type") or "").lower()]
     renderers = [a for a in processed_assets if "renderer" in a["fileName"].lower() or "renderer" in (a.get("type") or "").lower()]
-    
+
+    # 1. Parse Materials to find referenced textures
     material_to_textures = {}
     for mat in materials:
         mat_name = os.path.splitext(os.path.basename(mat["fileName"]))[0].lower()
         mat_cache_key = mat["url"].split("token=")[-1]
-        if "&file=" in mat_cache_key:
-            mat_cache_key = mat_cache_key.split("&file=")[0]
         mat_item = MEMORY_ASSET_CACHE.get(mat_cache_key)
         if mat_item:
             try:
@@ -751,14 +523,12 @@ def handle_extractor_response(response):
                 referenced = find_references_in_json(mat_json, [t["fileName"] for t in textures])
                 if referenced:
                     material_to_textures[mat_name] = referenced
-            except Exception:
-                pass
-    
+            except Exception: pass
+
+    # 2. Parse Renderers to map meshes to materials
     mesh_to_materials = {}
     for rend in renderers:
         rend_cache_key = rend["url"].split("token=")[-1]
-        if "&file=" in rend_cache_key:
-            rend_cache_key = rend_cache_key.split("&file=")[0]
         rend_item = MEMORY_ASSET_CACHE.get(rend_cache_key)
         if rend_item:
             try:
@@ -770,21 +540,9 @@ def handle_extractor_response(response):
                     for rmat in ref_mats:
                         rmat_name = os.path.splitext(os.path.basename(rmat))[0].lower()
                         mesh_to_materials[rm_name] = rmat_name
-            except Exception:
-                pass
+            except Exception: pass
 
-    categories = {
-        "3d_models": [m for m in meshes],
-        "textures": textures,
-        "materials": materials,
-        "animations": [a for a in processed_assets if "animation" in a["fileName"].lower() or "animator" in a["fileName"].lower()],
-        "configs": [a for a in processed_assets if any(ext in a["fileName"].lower() for ext in [".json", ".txt", ".dat", ".xml"]) and not any(a["fileName"] == m["fileName"] for m in meshes)],
-        "others": []
-    }
-
-    if HAS_PIL and textures:
-        trigger_sa_rgb_merges(processed_assets, textures, categories)
-    
+    # 3. Associate Textures with Meshes using the compiled metadata path
     for m in meshes:
         m_name = os.path.splitext(os.path.basename(m["fileName"]))[0].lower()
         matched_textures = []
@@ -794,22 +552,17 @@ def handle_extractor_response(response):
             for tex_file in material_to_textures[target_mat]:
                 for t in textures:
                     if t["fileName"].lower() == tex_file.lower():
-                        matched_textures.append({
-                            "url": t["url"],
-                            "fileName": t["fileName"]
-                        })
-        
+                        matched_textures.append(t["url"])
+                        
         if not matched_textures:
             for t in textures:
                 t_name = os.path.splitext(os.path.basename(t["fileName"]))[0].lower()
                 if check_name_similarity(m_name, t_name):
-                    matched_textures.append({
-                        "url": t["url"],
-                        "fileName": t["fileName"]
-                    })
-        
+                    matched_textures.append(t["url"])
+                    
         m["associated_textures"] = matched_textures
-    
+
+    # Group sibling parts for concurrent rendering using semantic checks
     composites = []
     used_meshes_in_composites = set()
     
@@ -821,12 +574,11 @@ def handle_extractor_response(response):
         
         siblings = []
         for j, m2 in enumerate(meshes):
-            if i == j:
-                continue
+            if i == j: continue
             m2_name = os.path.splitext(os.path.basename(m2["fileName"]))[0].lower()
             if check_name_similarity(m1_name, m2_name):
                 siblings.append(m2)
-        
+                
         if siblings:
             all_composite_meshes = [m1] + siblings
             comp_textures = set()
@@ -834,33 +586,37 @@ def handle_extractor_response(response):
             
             for mesh_obj in all_composite_meshes:
                 used_meshes_in_composites.add(mesh_obj["fileName"])
-                for tex_obj in mesh_obj["associated_textures"]:
-                    comp_textures.add(json.dumps(tex_obj))
-            
+                for tex_url in mesh_obj["associated_textures"]:
+                    comp_textures.add(tex_url)
+                    
             for mesh_obj in siblings:
                 comp_parts.append({
                     "name": os.path.basename(mesh_obj["fileName"]),
                     "url": mesh_obj["url"],
                     "associated_textures": mesh_obj["associated_textures"]
                 })
-            
+                
             composites.append({
                 "id": f"comp_{i}",
                 "name": f"{m1_basename.split('.')[0]} (Assembly Scene)",
                 "type": "Composite 3D Assembly",
                 "url": m1["url"],
-                "associated_textures": [json.loads(x) for x in comp_textures],
+                "associated_textures": list(comp_textures),
                 "composite_parts": comp_parts,
                 "preview_summary": f"Unified assembly of {len(all_composite_meshes)} structural mesh layers and {len(comp_textures)} mapped shader textures."
             })
 
-    categories["3d_models"] = [m for m in meshes if m["fileName"] not in used_meshes_in_composites]
+    # Group categorized explorer categories cleanly
+    categories = {
+        "3d_models": [m for m in meshes if m["fileName"] not in used_meshes_in_composites],
+        "textures": textures,
+        "materials": materials,
+        "animations": [a for a in processed_assets if "animation" in a["fileName"].lower() or "animator" in a["fileName"].lower()],
+        "configs": [a for a in processed_assets if any(ext in a["fileName"].lower() for ext in [".json", ".txt", ".dat", ".xml"]) and not any(a["fileName"] == m["fileName"] for m in meshes) and not any(a["fileName"] == t["fileName"] for t in textures)],
+        "others": []
+    }
     
     for asset in processed_assets:
-        asset.pop("data", None) # Clean inline asset data from json outputs
-        # Clean local file bytes dictionary parameter completely to avoid JSON serialization errors
-        asset.pop("_file_bytes", None) 
-        
         is_categorized = (
             any(asset["fileName"] == m["fileName"] for m in meshes) or
             any(asset["fileName"] == t["fileName"] for t in textures) or
@@ -870,19 +626,19 @@ def handle_extractor_response(response):
         )
         if not is_categorized:
             categories["others"].append(asset)
-    
-    extractor_data["composites"] = composites
-    extractor_data["categories"] = categories
-    extractor_data["files"] = processed_assets
-    extractor_data["assets"] = processed_assets
-    return jsonify(extractor_data), 200
+
+    response_data = {
+        "success": True,
+        "composites": composites,
+        "categories": categories,
+        "assets": processed_assets
+    }
+    return jsonify(response_data), 200
 
 def process_file_logic():
-    """Process/extract file logic"""
     bundle_url = request.args.get('bundle_url', '') or request.form.get('bundle_url', '')
     token = request.args.get('token', '') or request.form.get('token', '')
     real_bundle_url = ""
-    
     if "token=" in bundle_url:
         token_match = re.search(r'token=([^&]+)', bundle_url)
         if token_match:
@@ -892,10 +648,8 @@ def process_file_logic():
     elif token:
         decoded = decode_token(token)
         if decoded: real_bundle_url = decoded.get("url", "")
-    
     if not real_bundle_url and bundle_url.startswith("http"):
         real_bundle_url = bundle_url
-    
     if 'file' in request.files:
         uploaded_file = request.files['file']
         if uploaded_file.filename != '':
@@ -910,7 +664,6 @@ def process_file_logic():
                 return handle_extractor_response(response)
             except Exception as e:
                 return jsonify({"success": False, "message": f"Failed to connect to extractor: {str(e)}"}), 500
-    
     if real_bundle_url:
         try:
             encoded_url = base64.urlsafe_b64encode(real_bundle_url.encode('utf-8')).decode('utf-8')
@@ -919,26 +672,16 @@ def process_file_logic():
             return handle_extractor_response(response)
         except Exception as e:
             return jsonify({"success": False, "message": f"Failed to fetch from extractor: {str(e)}"}), 500
-    
     return jsonify({"success": False, "message": "No file uploaded or bundle URL provided"}), 400
 
 def stream_cache_logic(token):
-    """Stream cached asset logic"""
-    if not token:
-        return "Missing token query parameter", 400
-        
-    # Squelch appended BabylonJS extension path params if parsed directly
-    if "&file=" in token:
-        token = token.split("&file=")[0]
-    
+    if not token: return "Missing token query parameter", 400
     decoded = decode_token(token)
-    if not decoded:
-        return "Expired or invalid stream token payload.", 404
-    
+    if not decoded: return "Expired or invalid stream token payload.", 404
     filename = decoded.get("filename", "file")
     mime_type = decoded.get("content_type", "application/octet-stream")
     cache_key = decoded.get("cache_key")
-    
+    global MEMORY_ASSET_CACHE
     if cache_key and cache_key in MEMORY_ASSET_CACHE:
         cached_item = MEMORY_ASSET_CACHE[cache_key]
         response = Response(cached_item["content"], mimetype=mime_type)
@@ -946,7 +689,6 @@ def stream_cache_logic(token):
         response.headers["Accept-Ranges"] = "bytes"
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
-    
     if "content_b64" in decoded:
         try:
             content = base64.b64decode(decoded["content_b64"])
@@ -961,9 +703,7 @@ def stream_cache_logic(token):
             response.headers["Accept-Ranges"] = "bytes"
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
-        except Exception:
-            pass
-    
+        except Exception: pass
     remote_url = decoded.get("url")
     if remote_url:
         try:
@@ -980,83 +720,37 @@ def stream_cache_logic(token):
                 response.headers["Accept-Ranges"] = "bytes"
                 response.headers["Access-Control-Allow-Origin"] = "*"
                 return response
-            else:
-                print(f"Non-200 stream fetch status for token: {res.status_code}")
-        except Exception as e:
-            print(f"Error streaming cache from remote CDN: {e}")
-    
+        except Exception: pass
     return "Expired or unavailable stream token payload.", 404
 
 def extract_zip_logic(token):
-    """Extract and download as ZIP logic"""
-    if not token:
-        return "Missing token query parameter", 400
-    
+    if not token: return "Missing token query parameter", 400
     decoded = decode_token(token)
-    if not decoded:
-        return "Invalid or expired stream token payload", 400
-    
+    if not decoded: return "Invalid or expired stream token payload", 400
     remote_url = decoded.get("url")
-    if not remote_url:
-        return "Target bundle address missing in decrypted token payload", 400
-    
+    if not remote_url: return "Target bundle address missing in decrypted token payload", 400
     encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
-    extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-    
+    extractor_url = f"{EXTRACTOR_API_URL}&download_type=zip"
     try:
-        res = http_session.get(extractor_url, timeout=60)
-        if res.status_code != 200:
+        res = http_session.get(extractor_url, timeout=60, stream=True)
+        if res.status_code == 200:
+            filename = decoded.get("filename", "extracted_asset") + ".zip"
+            def generate():
+                for chunk in res.iter_content(chunk_size=8192): yield chunk
+            response = Response(generate(), mimetype='application/zip')
+            response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        else:
             return f"Extractor pipeline failure status code: {res.status_code}", 500
-        
-        try:
-            data = res.json()
-        except Exception as e:
-            return f"Invalid JSON response returned from extractor: {str(e)}", 500
-            
-        files_list = data.get("files", []) or data.get("assets", []) or data.get("extracted", [])
-        if not isinstance(files_list, list):
-            files_list = []
-            
-        zip_io = io.BytesIO()
-        files_added = 0
-        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
-            for ext_file in files_list:
-                fname = ext_file.get("name") or ext_file.get("fileName")
-                zpath = ext_file.get("path") or fname
-                b64_content = ext_file.get("data", "")
-                if b64_content and fname:
-                    try:
-                        file_bytes = base64.b64decode(b64_content)
-                        zf.writestr(zpath, file_bytes)
-                        files_added += 1
-                    except Exception:
-                        pass
-                        
-        if files_added == 0:
-            return "No assets could be extracted from this bundle payload to generate a ZIP", 400
-            
-        zip_io.seek(0)
-        filename = decoded.get("filename", "extracted_asset")
-        if not filename.endswith(".zip"):
-            filename += ".zip"
-            
-        response = Response(zip_io.getvalue(), mimetype='application/zip')
-        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        return response
-        
     except Exception as e:
         return f"Failed connecting proxy mapping to zip extractor endpoint: {e}", 500
 
 def bulk_zip_logic(version):
-    """Bulk ZIP download logic"""
-    if not version or not re.match(r'^\d+\.\d+\.\d+$', version):
-        return "Incorrect version format entered", 400
-    
+    if not version or not re.match(r'^\d+\.\d+\.\d+$', version): return "Incorrect version format entered", 400
     new_text, active_version, base_url = get_file_info_data(version)
     if not new_text:
         return "Target version logs missing from server", 404
-    
     prev_versions = []
     current_temp = active_version
     for _ in range(6):
@@ -1127,99 +821,369 @@ def bulk_zip_logic(version):
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
 
-def send_telegram_message(chat_id, text):
-    """Sends a formatted HTML text message via Telegram Bot API"""
-    url = f"{TELEGRAM_API}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    try:
-        http_session.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Failed sending Telegram log update: {e}")
 
-def send_latest_version_to_telegram(chat_id):
-    """Scans and replies with the current active version metrics directly to Telegram"""
-    try:
-        res = http_session.get(VERSION_API, timeout=5)
-        data = res.json()
-        if data.get("success") and "remote_version" in data:
-            base_ver = data["remote_version"]
-            candidates = [base_ver]
-            for step in [1, 2, 3]:
-                nxt = get_next_version(base_ver, step)
-                if nxt:
-                    candidates.append(nxt)
-            fetched_maps = get_multiple_file_info_data(candidates)
-            active_ver = base_ver
-            for cand in reversed(candidates):
-                if cand in fetched_maps:
-                    active_ver = cand
-                    break
-            target_ver = get_next_version(active_ver, 1)
-            msg = (
-                f"🎯 <b>Latest Live Active Version:</b>\n"
-                f"• Active Version: <code>{active_ver}</code>\n"
-                f"• Next Tracked: <code>{target_ver}</code>"
-            )
-            send_telegram_message(chat_id, msg)
-            return
-    except Exception as e:
-        print(f"Error pulling latest version on Telegram request: {e}")
-    send_telegram_message(chat_id, "⚠️ Failed to query latest version metrics from server API.")
+# ==========================================
+# Telegram Bot Database & Webhook System
+# ==========================================
 
-def run_version_check_to_telegram(chat_id, version):
-    """Runs a lookup for the version and replies with reference statistics to Telegram"""
+def send_message(chat_id, text, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        return res.json()
+    except Exception as e:
+        print(f"Telegram send error: {e}")
+    return None
+
+def send_message_with_keyboard(chat_id, text, reply_markup, parse_mode=None):
+    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        http_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+         print(f"Telegram menu send error: {e}")
+
+def read_db_from_chat(chat_id):
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            text = res["result"]["pinned_message"].get("text", "")
+            if "📦 DATABASE STORAGE" in text:
+                lines = text.split("\n")
+                for line in lines:
+                    line_strip = line.strip()
+                    if line_strip.startswith("{") and line_strip.endswith("}"):
+                        return json.loads(line_strip)
+    except Exception as e:
+        print(f"DB read warning for {chat_id}: {e}")
+    return None
+
+def write_db_to_chat(chat_id, db_dict):
+    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            msg = res["result"]["pinned_message"]
+            if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
+                    "chat_id": chat_id,
+                    "message_id": msg["message_id"],
+                    "text": db_text
+                }, timeout=10)
+                return
+        new_msg = send_message(chat_id, db_text)
+        if new_msg and new_msg.get("ok"):
+            msg_id = new_msg["result"]["message_id"]
+            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "disable_notification": True
+            }, timeout=10)
+    except Exception as e:
+         print(f"DB write warning: {e}")
+
+def get_db():
+    owner_db = read_db_from_chat(OWNER_ID)
+    if not owner_db:
+        owner_db = read_db_from_chat(GROUP_ID)
+        if owner_db:
+            write_db_to_chat(OWNER_ID, owner_db)
+            try:
+                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
+                if res.get("ok") and "pinned_message" in res["result"]:
+                    msg = res["result"]["pinned_message"]
+                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+            except Exception: pass
+            
+    if not owner_db:
+        return {
+            "allowed_users": [OWNER_ID], 
+            "pending_requests": [],
+            "rejection_sticker": None,
+            "owner_state": None
+        }
+        
+    needs_write = False
+    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
+    for k in legacy_keys:
+        if k in owner_db:
+            owner_db.pop(k, None)
+            needs_write = True
+            
+    if "allowed_users" not in owner_db: 
+        owner_db["allowed_users"] = [OWNER_ID]
+        needs_write = True
+    if "pending_requests" not in owner_db: 
+        owner_db["pending_requests"] = []
+        needs_write = True
+        
+    if needs_write:
+        save_db(owner_db)
+        
+    return owner_db
+
+def save_db(db):
+    write_db_to_chat(OWNER_ID, db)
+
+def is_user_allowed(user_id):
+    if user_id == OWNER_ID: return True
+    db = get_db()
+    for u in db.get("allowed_users", []):
+        if isinstance(u, int) and u == user_id: return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
+    return False
+
+def is_action_permitted(chat_id, user_id):
+    """Checks if the user has permission to interact with the bot."""
+    if user_id == OWNER_ID:
+        return True
+    if str(chat_id) == GROUP_ID:
+        return True
+    if is_user_allowed(user_id):
+        return True
+    return False
+
+def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
+    db = get_db()
+    allowed = db.get("allowed_users", [])
+    exists = False
+    for i, u in enumerate(allowed):
+        if isinstance(u, int) and u == user_id:
+            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
+            exists = True
+            break
+        elif isinstance(u, dict) and u.get("user_id") == user_id:
+            u["first_name"] = first_name
+            u["username"] = username
+            u["chat_title"] = chat_title
+            exists = True
+            break
+    if not exists:
+        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
+    db["allowed_users"] = allowed
+    save_db(db)
+
+def add_pending_request(user_id, first_name, username, chat_title):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    if not any(p["user_id"] == user_id for p in pending):
+        pending.append({
+            "user_id": user_id,
+            "first_name": first_name,
+            "username": username,
+            "chat_title": chat_title
+        })
+        db["pending_requests"] = pending
+        write_db_to_chat(OWNER_ID, db)
+
+def remove_pending_request(user_id):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    pending = [p for p in pending if p["user_id"] != user_id]
+    db["pending_requests"] = pending
+    write_db_to_chat(OWNER_ID, db)
+
+def run_miniupdate_extraction_details(version):
+    """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
+    # Strict exact check for manual search queries (as requested)
     new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
-        send_telegram_message(chat_id, f"❌ Version <code>{version}</code> logs are missing on servers.")
-        return
-        
-    lines = new_text.splitlines()
-    total_assets = len([l for l in lines if l.strip()])
-    
-    msg = (
-        f"📦 <b>Discovered Package Status:</b>\n"
-        f"• Active Version: <code>{active_version}</code>\n"
-        f"• Suffix Base URL: <code>{base_url}</code>\n"
-        f"• Total File references: <b>{total_assets} files found</b>\n\n"
-        f"Please open the dashboard web panel to view structured assets, visual previews, and download compiled ZIP files."
-    )
-    send_telegram_message(chat_id, msg)
+        return f"❌ Version <b>{version}</b> not found.", None, {}
 
-# API Endpoints
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    check_api_health()
-    return jsonify({
-        "status": HEALTH_STATUS['status'],
-        "apis": {
-            "version_api": HEALTH_STATUS['version_api'],
-            "extractor_api": HEALTH_STATUS['extractor_api'],
-            "file_sources": HEALTH_STATUS['file_sources']
-        },
-        "last_check": HEALTH_STATUS['last_check'],
-        "uptime": HEALTH_STATUS['uptime'],
-        "cache_stats": {
-            "file_info_cache_size": len(FILE_INFO_CACHE),
-            "extracted_files_cache_size": len(EXTRACTED_FILES_CACHE),
-            "memory_asset_cache_size": len(MEMORY_ASSET_CACHE)
-        }
-    }), 200
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: sz = int(parts[2])
+                except Exception: sz = 0
+                old_files_map[file_id] = sz
+
+    file_entries = []
+    total_size = 0 # Sum of only updated (Modified + New) files as clarified by the user
+    new_files_count = 0
+    changed_files_count = 0
+
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str = parts[0].strip(), parts[2].strip()
+        try: size = int(size_str)
+        except Exception: size = 0
+        
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: 
+                status = "Modified"
+                changed_files_count += 1
+                total_size += size
+                file_entries.append((file_id, status, size))
+        else: 
+            status = "New"
+            new_files_count += 1
+            total_size += size
+            file_entries.append((file_id, status, size))
+
+    size_mb = round(total_size / (1024 * 1024), 2)
+    
+    simple_file_list = [{"fileName": entry[0]} for entry in file_entries]
+    new_items = []
+    try:
+        new_items = extract_new_game_items(version, new_text)
+    except Exception: pass
+    
+    analysis = analyze_update_purpose(simple_file_list, new_items)
+
+    # Category classifications for the bot
+    categories = {"obj": 0, "png": 0, "json": 0, "other": 0}
+    for fid, stat, sz in file_entries:
+        l_fid = fid.lower()
+        if l_fid.endswith(".obj"): categories["obj"] += 1
+        elif any(l_fid.endswith(ext) for ext in [".png", ".jpg", ".jpeg"]): categories["png"] += 1
+        elif l_fid.endswith(".json"): categories["json"] += 1
+        else: categories["other"] += 1
+
+    msg = [
+        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
+        "│",
+        f"├ 🟢 Version Extracted: <b>{version}</b>",
+        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
+        f"├ Changed Files Count: <b>{changed_files_count}</b>",
+        f"├ New Files Count: <b>{new_files_count}</b>",
+        "│",
+        "├ 🧠 INTEL REPORT:",
+        f"│ <code>{analysis['summary']}</code>",
+        "│"
+    ]
+
+    if analysis['highlights']:
+        msg.append("├ 💡 KEY HIGHLIGHTS:")
+        for highlight in analysis['highlights'][:5]:
+            msg.append(f"│ • {highlight}")
+        msg.append("│")
+
+    # Grouped files view for Telegram
+    msg.append("├ 📁 CATEGORIES:")
+    msg.append("<blockquote>")
+    if categories["obj"] > 0: msg.append(f"📦 <b>Geometry & 3D Meshes:</b> {categories['obj']} meshes")
+    if categories["png"] > 0: msg.append(f"🎨 <b>Textures & Sprite Assets:</b> {categories['png']} sprites")
+    if categories["json"] > 0: msg.append(f"⚙️ <b>MonoBehaviour & GameData:</b> {categories['json']} configs")
+    if categories["other"] > 0: msg.append(f"📝 <b>Other Resources:</b> {categories['other']} files")
+    msg.append("</blockquote>")
+
+    if new_items:
+        msg.append("│")
+        msg.append("├ ✨ NEW GAME ITEMS:")
+        msg.append("<blockquote>")
+        for idx, item in enumerate(new_items[:12], 1):
+            clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
+            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
+        if len(new_items) > 12:
+            msg.append(f"... and {len(new_items) - 12} more items.")
+        msg.append("</blockquote>")
+
+    msg.append("╰──────────────────────")
+    
+    # Store dynamic mapping in local memory store to prevent database repinning spam
+    file_keyboard_mappings = {}
+    for file_id, stat, sz in file_entries[:5]:
+        mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
+        suffix = None
+        for line in new_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 5 and parts[0].strip() == file_id:
+                suffix = parts[4].strip()
+                break
+        if suffix:
+            encoded = encode_suffix(suffix)
+            download_url = f"{base_url}{version}/gameassetbundles/{file_id}.{encoded}~3D"
+            BOT_TEMP_MAPPINGS[mapping_id] = {
+                "url": download_url,
+                "filename": file_id.split('/')[-1],
+                "version": version
+            }
+            file_keyboard_mappings[file_id] = mapping_id
+            
+    return "\n".join(msg), file_entries, file_keyboard_mappings
+
+def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=None, filename="bundle.unity3d"):
+    try:
+        if is_local_upload and upload_bytes:
+            files = {'asset_bundle': (filename, upload_bytes, 'application/octet-stream')}
+            res = http_session.post(EXTRACTOR_API_URL, files=files, timeout=45)
+        else:
+            encoded_url = base64.urlsafe_b64encode(file_path_or_url.encode('utf-8')).decode('utf-8')
+            res = http_session.get(f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}", timeout=45)
+        
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("files", []) or data.get("assets", [])
+    except Exception as e:
+        print(f"Parse bundle processing failed: {e}")
+    return []
+
+def send_extracted_document_to_chat(chat_id, file_bytes, filename):
+    url = f"{TELEGRAM_API}/sendDocument"
+    files = {"document": (filename, file_bytes, 'application/octet-stream')}
+    payload = {"chat_id": chat_id}
+    try:
+        http_session.post(url, data=payload, files=files, timeout=45)
+    except Exception as e:
+         print(f"Error sending document: {e}")
+
+def clear_reply_markup(chat_id, message_id):
+    url = f"{TELEGRAM_API}/editMessageReplyMarkup"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "reply_markup": {"inline_keyboard": []}
+    }
+    try:
+        http_session.post(url, json=payload, timeout=5)
+    except Exception: pass
+
+def delete_message(chat_id, message_id):
+    url = f"{TELEGRAM_API}/deleteMessage"
+    try:
+        http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
+    except Exception: pass
+
+
+# ==========================================
+# Flask Controller & Explicit Webhook Routes
+# ==========================================
 
 @app.route('/api/webhook', methods=['GET', 'POST'])
 @app.route('/webhook', methods=['GET', 'POST'])
-def telegram_webhook_route_entry():
+def telegram_webhook():
     if request.method == 'GET':
+        # Dynamic GET diagnostic and webhook registration on Vercel
         try:
             host = request.headers.get('Host')
             protocol = "https" if "localhost" not in host else "http"
             current_url = f"{protocol}://{host}/api/webhook"
             
-            webhook_setup_url = f"{TELEGRAM_API}/setWebhook"
+            webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
             setup_res = http_session.post(webhook_setup_url, json={"url": current_url}, timeout=10).json()
             
             diagnostic_text = (
@@ -1242,41 +1206,32 @@ def telegram_webhook_route_entry():
             
     return handle_bot_webhook()
 
-@app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'OPTIONS'])
-@app.route('/<path:path>', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
+@app.route('/<path:path>', methods=['GET', 'POST'])
 def handle_all_requests(path):
-    """Main request handler"""
-    if request.method == 'OPTIONS':
-        return '', 204
-    
     full_path = "/" + path.strip("/")
     action = request.args.get('action')
     
-    # Process file extraction
-    if full_path == '/api/process' or action == 'process':
+    if full_path == '/api/process' or full_path == '/process' or action == 'process':
         return process_file_logic()
-    # Check for updates
-    elif full_path == '/api/update' or action == 'update':
-        return check_update_logic()
-    # Get latest version
-    elif full_path == '/api/latest-version' or action == 'latest-version':
+    elif full_path == '/api/latest-version' or full_path == '/latest-version' or action == 'latest-version':
         return latest_version_logic()
-    # Stream cached asset (supports action parameters or URL suffix)
-    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/') or action == 'stream':
-        token = request.args.get('token')
-        if not token:
-            token = full_path.split('/')[-1]
-        return stream_cache_logic(token)
-    # Extract and download as ZIP
-    elif full_path == '/api/extract-zip' or action == 'extract-zip':
-        token = request.args.get('token')
-        return extract_zip_logic(token)
-    # Bulk download all files as ZIP
-    elif full_path == '/api/bulk-zip' or action == 'bulk-zip':
+    elif full_path == '/api/update' or full_path == '/update' or action == 'update':
+        return check_update_logic()
+    elif full_path == '/api/bulk-zip' or full_path == '/bulk-zip' or action == 'bulk-zip':
         version = request.args.get('version', '').strip()
         return bulk_zip_logic(version)
-    # Serve index.html
-    elif full_path == '/' or full_path == '/api' or full_path == '/api/':
+    elif full_path == '/api/extract-zip' or full_path == '/extract-zip' or action == 'extract-zip':
+        token = request.args.get('token')
+        return extract_zip_logic(token)
+    elif full_path.startswith('/api/stream-cache/') or full_path.startswith('/stream-cache/'):
+        token = full_path.split('/')[-1]
+        return stream_cache_logic(token)
+    elif action == 'stream':
+        return stream_cache_logic(request.args.get('token'))
+
+    # Serve webpage index file statically
+    if request.method == 'GET' and (full_path == '/' or full_path == '/api' or full_path == '/api/'):
         try:
             for filename in ['api/index.html', 'public/index.html', 'index.html']:
                 if os.path.exists(filename):
@@ -1285,8 +1240,9 @@ def handle_all_requests(path):
             return jsonify({"success": False, "message": "index.html template missing"}), 404
         except Exception as e:
             return f"Error: {str(e)}", 500
-    
+
     return jsonify({"success": False, "message": f"Endpoint '{full_path}' is unmapped."}), 404
+
 
 def handle_bot_webhook():
     try:
@@ -1302,10 +1258,12 @@ def handle_bot_webhook():
             user_id = cb["from"]["id"]
             data = cb.get("data", "")
 
+            # Secure action bypass for allowed group chat
             if not is_action_permitted(chat_id, user_id):
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Access denied."}, timeout=5)
                 return jsonify({"status": "ok"}), 200
 
+            # Message deletion / Close button
             if data == "cb_close":
                 delete_message(chat_id, msg_id)
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
@@ -1317,6 +1275,7 @@ def handle_bot_webhook():
                 first_name = cb_user.get("first_name", "Unknown")
                 username = cb_user.get("username", "None")
                 
+                # Manual request authorization prompting Owner's Personal Chat
                 http_session.post(f"{TELEGRAM_API}/sendMessage", json={
                     "chat_id": OWNER_ID,
                     "text": (
@@ -1334,6 +1293,7 @@ def handle_bot_webhook():
                     }
                 }, timeout=10)
                 
+                # Edit requester's button feedback state
                 http_session.post(f"{TELEGRAM_API}/editMessageText", json={
                     "chat_id": chat_id,
                     "message_id": msg_id,
@@ -1360,10 +1320,12 @@ def handle_bot_webhook():
                     send_message(target_id, "Your request was declined by the administrator.")
                 return jsonify({"status": "ok"}), 200
 
+            # Extraction actions
             elif data.startswith("check_ver_") or data.startswith("back_ver_"):
                 ver = data.replace("check_ver_", "").replace("back_ver_", "")
                 http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
                 
+                # Show dynamic in-progress tracking state in-place
                 url = f"{TELEGRAM_API}/editMessageText"
                 http_session.post(url, json={
                     "chat_id": chat_id,
@@ -1376,6 +1338,7 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
+                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1417,6 +1380,7 @@ def handle_bot_webhook():
                     target_url = meta.get("url")
                     ver = meta.get("version", "1.126.6")
                     
+                    # Update message to show "Extracting" progress state
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
                         "chat_id": chat_id,
@@ -1528,6 +1492,7 @@ def handle_bot_webhook():
                         sf = sub_files[idx]
                         fname = sf.get("name") or sf.get("fileName")
                         
+                        # Edit current inline menu to show "Extracting" status
                         url = f"{TELEGRAM_API}/editMessageText"
                         http_session.post(url, json={
                             "chat_id": chat_id,
@@ -1539,8 +1504,10 @@ def handle_bot_webhook():
                         b64 = sf.get("data", "")
                         if b64:
                             file_bytes = base64.b64decode(b64)
+                            # Deliver extracted raw document to Telegram
                             send_extracted_document_to_chat(chat_id, file_bytes, fname)
                             
+                            # Auto-clean active markup buttons (as requested)
                             keyboard = [[{"text": "⬅️ Back to Files List", "callback_data": f"ext_spec_{mapping_id}"}]]
                             url = f"{TELEGRAM_API}/editMessageText"
                             http_session.post(url, json={
@@ -1608,6 +1575,7 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
+            # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
             if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
                 version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
                 if version_match:
@@ -1621,6 +1589,7 @@ def handle_bot_webhook():
                     ), {"inline_keyboard": keyboard}, parse_mode="HTML")
                     return jsonify({"status": "ok"}), 200
 
+            # Access controls for private interaction commands
             if raw_text.startswith("/"):
                 if not is_action_permitted(chat_id, user_id):
                     if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract"):
@@ -1644,6 +1613,7 @@ def handle_bot_webhook():
                     return jsonify({"status": "ok"}), 200
                 ver = parts[1].strip()
                 
+                # Send live in-progress state first to feel active and responsive
                 sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
                 if not sent_msg or not sent_msg.get("ok"):
                     return jsonify({"status": "ok"}), 200
@@ -1654,6 +1624,7 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     if file_entries:
+                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1698,6 +1669,7 @@ def handle_bot_webhook():
                                     if sub_files:
                                         mapping_id = str(uuid.uuid4())[:8]
                                         
+                                        # Save dynamic mapping in local memory store to prevent database repinning spam
                                         BOT_TEMP_MAPPINGS[mapping_id] = {
                                             "url": dl_url,
                                             "filename": file_name
