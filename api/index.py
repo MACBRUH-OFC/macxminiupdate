@@ -115,24 +115,17 @@ def encode_suffix(suffix):
         suffix = suffix[:-1]
     return suffix.replace('+', '~2B').replace('/', '~2F').replace('=', '~3D')
 
-def get_file_info_data_exact(version, custom_base_url=None):
+def get_file_info_data_exact(version):
     """Fetches exact version without fallback."""
-    cache_key = f"{version}:{custom_base_url}" if custom_base_url else version
-    if cache_key in FILE_INFO_CACHE:
-        return FILE_INFO_CACHE[cache_key]
     if version in FILE_INFO_CACHE:
         return FILE_INFO_CACHE[version]
         
-    search_domains = [custom_base_url] + DOMAINS if custom_base_url else DOMAINS
-    for base in search_domains:
-        if not base:
-            continue
+    for base in DOMAINS:
         url = f"{base}{version}/fileinfo"
         try:
-            res = http_session.get(url, timeout=5)
+            res = http_session.get(url, timeout=4)
             if res.status_code == 200:
                 val = (res.text, version, base)
-                FILE_INFO_CACHE[cache_key] = val
                 FILE_INFO_CACHE[version] = val
                 return val
         except Exception:
@@ -434,161 +427,124 @@ def extract_version_from_input(input_str):
     """Fuzzy regex matching system extracting clean target versions or fileinfo URLs."""
     if not input_str:
         return None
-    # Matches any 3 or 4 part version string separated by dots safely
-    match = re.search(r'(?:/android/|android/|^)(\d+\.\d+\.\d+(?:\.\d+)?)', input_str.strip())
+    match = re.search(r'(?:/android/|android/|^)(\d+\.\d+\.\d+)', input_str.strip())
     if match:
         return match.group(1)
-    match_fallback = re.search(r'(\d+\.\d+\.\d+(?:\.\d+)?)', input_str)
+    match_fallback = re.search(r'(\d+\.\d+\.\d+)', input_str)
     if match_fallback:
         return match_fallback.group(1)
     return None
 
-def extract_base_url_from_input(input_str):
-    """Isolates the custom hotfix base URL from complete fileinfo links."""
-    if not input_str or not input_str.strip().startswith("http"):
-        return None
-    match = re.search(r'(https?://.*?/android/)', input_str.strip())
-    if match:
-        return match.group(1)
-    return None
-
-def extract_theme_keywords(file_entries):
-    """Parses file paths and isolates relevant theme/event suffix patterns (e.g. sf49, pony49)."""
-    keywords = set()
-    for fid, _, _ in file_entries:
-        name = fid.split('/')[-1].lower()
-        matches = re.findall(r'[a-z]+_?[a-z]*\d+', name)
-        for m in matches:
-            if not m.isdigit():
-                keywords.add(m.replace('_', ''))
-    return sorted(list(keywords))[:10]
-
-def package_new_items_icons(version, new_items):
-    """Downloads all item icons from the CDN in parallel and packages them into a structured ZIP file."""
-    if not new_items:
-        return None
+def analyze_update_purpose(files, new_items):
+    categories = set()
+    highlights = []
     
-    zip_io = io.BytesIO()
-    icons_downloaded = 0
+    obj_count = sum(1 for f in files if f["fileName"].lower().endswith(".obj"))
+    png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]))
+    config_count = sum(1 for f in files if "config/" in f["fileName"].lower())
+    loc_count = sum(1 for f in files if "localization/" in f["fileName"].lower())
+    sound_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".ogg", ".wav", ".mp3"]))
     
-    def fetch_icon(item):
-        icon_url = item.get("icon_url")
-        item_id = item.get("id")
-        if not icon_url or not item_id:
-            return None, None
-        try:
-            res = http_session.get(icon_url, timeout=5)
-            if res.status_code == 200:
-                ext = "png"
-                if "jpeg" in res.headers.get("Content-Type", ""): ext = "jpg"
-                elif "gif" in res.headers.get("Content-Type", ""): ext = "gif"
-                return f"{item_id}_{item['name']}.{ext}", res.content
-        except Exception:
-            pass
-        return None, None
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = executor.map(fetch_icon, new_items[:30])
-        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
-            for filename, content in futures:
-                if filename and content:
-                    clean_filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
-                    zf.writestr(clean_filename, content)
-                    icons_downloaded += 1
-                    
-    if icons_downloaded == 0:
-        return None
+    if obj_count > 0:
+        categories.add("3D Visual Models")
+        highlights.append(f"Injected {obj_count} high-fidelity 3D meshes")
+    if png_count > 0:
+        categories.add("High-Res Textures")
+        highlights.append(f"Added {png_count} render mapping sprites/textures")
+    if config_count > 0:
+        categories.add("Gameplay Config")
+        highlights.append("Modified gameplay attribute settings or balance rules")
+    if loc_count > 0:
+        categories.add("Localization / Texts")
+        highlights.append("Updated localized text strings")
+    if sound_count > 0:
+        categories.add("Audio Effects")
+        highlights.append(f"Updated {sound_count} acoustic assets/effects")
         
-    zip_io.seek(0)
-    return zip_io.getvalue()
-
-def compile_visual_assets_bundle(version, file_entries, base_url):
-    """Finds visual bundles, extracts their internal meshes/textures, and packages them into a ZIP."""
-    visual_bundles = [f for f, stat, sz in file_entries if any(keyword in f.lower() for keyword in ["preview_", "weapon_", "avatar_", "vfx_"])]
-    if not visual_bundles:
-        return None
-        
-    zip_io = io.BytesIO()
-    assets_extracted = 0
-    
-    def extract_and_parse(fid):
-        suffix = None
-        map_val = FILE_INFO_CACHE.get(version)
-        if not map_val:
-            return []
-        new_text, _, _ = map_val
-        for line in new_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 5 and parts[0].strip() == fid:
-                suffix = parts[4].strip()
-                break
-        if not suffix:
-            return []
-        encoded = encode_suffix(suffix)
-        download_url = f"{base_url}{version}/gameassetbundles/{fid}.{encoded}~3D"
-        try:
-            encoded_url = base64.urlsafe_b64encode(download_url.encode('utf-8')).decode('utf-8')
-            extractor_url = f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}"
-            res = http_session.get(extractor_url, timeout=20)
-            if res.status_code == 200:
-                data = res.json()
-                return data.get("files", []) or data.get("assets", [])
-        except Exception:
-            pass
-        return []
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        results = executor.map(extract_and_parse, visual_bundles[:2])
-        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
-            for sub_files in results:
-                for sf in sub_files:
-                    fname = sf.get("name") or sf.get("fileName")
-                    zpath = sf.get("path") or fname
-                    b64 = sf.get("data", "")
-                    if b64 and fname and any(zpath.lower().endswith(ext) for ext in [".obj", ".png", ".jpg", ".jpeg"]):
-                        try:
-                            content = base64.b64decode(b64)
-                            zf.writestr(zpath, content)
-                            assets_extracted += 1
-                        except Exception:
-                            pass
-                            
-    if assets_extracted == 0:
-        return None
-        
-    zip_io.seek(0)
-    return zip_io.getvalue()
-
-def trigger_background_asset_delivery(chat_id, version, file_entries, custom_base_url=None):
-    """Compiles and delivers new item icon and composite visual ZIP packs directly to Telegram."""
-    new_text, _, base_url = get_file_info_data_exact(version, custom_base_url)
-    if not new_text or not base_url:
-        return
-        
-    new_items = []
-    try:
-        new_items = extract_new_game_items(version, new_text)
-    except Exception:
-        pass
+    weapon_skins = set()
+    emotes = set()
+    for f in files:
+        fname = f["fileName"].lower()
+        for g in ["aug", "m249", "ak47", "scar", "m1887", "mp5", "groza", "awm", "desert_eagle"]:
+            if g in fname:
+                weapon_skins.add(g.upper())
+        if "emote" in fname or "motion" in fname:
+            emotes.add(fname.split('/')[-1])
+            
+    if weapon_skins:
+        categories.add("Weapon Customization")
+        highlights.append(f"New cosmetics or parameters for: {', '.join(weapon_skins)}")
+    if emotes:
+        categories.add("Expressive Emotes")
+        highlights.append(f"New animation sequences: {', '.join(list(emotes)[:2])}")
         
     if new_items:
-        send_message(chat_id, f"📥 Packaging {len(new_items)} new item icons. Please stand by...")
-        icons_zip = package_new_items_icons(version, new_items)
-        if icons_zip:
-            send_extracted_document_to_chat(chat_id, icons_zip, f"New_Item_Icons_{version}.zip")
+        categories.add("Content Update")
+        bundle_count = sum(1 for i in new_items if i.get("is_bundle"))
+        if bundle_count > 0:
+            categories.add("Exclusive Costumes")
+            highlights.append(f"Discovered {bundle_count} item bundles")
+        item_names = [i["name"] for i in new_items[:3]]
+        highlights.append(f"Added new inventory assets: {', '.join(item_names)}")
+
+    if "Gameplay Config" in categories and len(categories) == 1:
+        summary = "This mini-update acts as a tactical hotfix modifying underlying server gameplay rules or parameters."
+    elif "3D Visual Models" in categories or "High-Res Textures" in categories:
+        summary = "This update introduces visual content enhancements, skin updates, and textures for localized events."
+        if weapon_skins:
+            summary += f" Specifically targeting visual attributes for weapon models ({', '.join(weapon_skins)})."
+    else:
+        summary = "This is a standard client synchronization maintenance patch coordinating game asset metadata rules."
+        
+    return {
+        "summary": summary,
+        "categories": list(categories) if categories else ["Maintenance Patch"],
+        "highlights": highlights,
+        "severity": "Visual Content" if "3D Visual Models" in categories else "System Synced"
+    }
+
+def latest_version_logic():
+    try:
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
             
-    visuals_zip = compile_visual_assets_bundle(version, file_entries, base_url)
-    if visuals_zip:
-        send_message(chat_id, "📥 Grouping visual assets (meshes & textures)...")
-        send_extracted_document_to_chat(chat_id, visuals_zip, f"Visual_Assets_Pack_{version}.zip")
+            candidates = [base_ver]
+            for step in [1, 2, 3]:
+                nxt = get_next_version(base_ver, step)
+                if nxt:
+                    candidates.append(nxt)
+            
+            fetched_maps = get_multiple_file_info_data(candidates)
+            
+            active_ver = base_ver
+            for cand in reversed(candidates):
+                if cand in fetched_maps:
+                    active_ver = cand
+                    break
+                    
+            target_ver = get_next_version(active_ver, 1)
+            
+            return jsonify({
+                "success": True, 
+                "current_version": active_ver, 
+                "target_version": target_ver
+            })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+    return jsonify({"success": False, "message": "Failed response lookup."}), 500
 
-def run_miniupdate_extraction_details(version, custom_base_url=None):
-    """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
-    new_text, active_version, base_url = get_file_info_data_exact(version, custom_base_url)
+def check_update_logic():
+    input_val = request.args.get('version', '').strip()
+    version = extract_version_from_input(input_val)
+    if not version:
+        return jsonify({"success": False, "message": "Incorrect version format or link entered"}), 400
+
+    new_text, active_version, base_url = get_file_info_data_exact(version)
     if not new_text:
-        return f"❌ Version <b>{version}</b> not found.", None, {}
-
+        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
+        
     prev_versions = []
     current_temp = active_version
     for _ in range(6):
@@ -596,10 +552,9 @@ def run_miniupdate_extraction_details(version, custom_base_url=None):
         if not prev_ver: break
         prev_versions.append(prev_ver)
         current_temp = prev_ver
-
-    fetched_maps = get_multiple_file_info_data(prev_versions)
-    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
-
+        
+    fetched_maps_prev = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps_prev[v][0] for v in prev_versions if v in fetched_maps_prev]
     old_files_map = {}
     for old_text in reversed(old_texts):
         for line in old_text.splitlines():
@@ -607,113 +562,52 @@ def run_miniupdate_extraction_details(version, custom_base_url=None):
             parts = line.split(',')
             if len(parts) >= 3:
                 file_id = parts[0].strip()
-                try: sz = int(parts[2])
-                except Exception: sz = 0
-                old_files_map[file_id] = sz
-
-    file_entries = []
+                try: old_size = int(parts[2])
+                except Exception: old_size = 0
+                old_files_map[file_id] = old_size
+    file_infos = []
     total_size = 0
-    new_files_count = 0
-    changed_files_count = 0
-
     for line in new_text.splitlines():
         if not line.strip(): continue
         parts = line.split(',')
         if len(parts) < 5: continue
-        file_id, size_str = parts[0].strip(), parts[2].strip()
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
         try: size = int(size_str)
         except Exception: size = 0
-        
         if file_id in old_files_map:
-            if old_files_map[file_id] != size: 
-                status = "Modified"
-                changed_files_count += 1
-                total_size += size
-                file_entries.append((file_id, status, size))
-        else: 
-            status = "New"
-            new_files_count += 1
-            total_size += size
-            file_entries.append((file_id, status, size))
-
-    size_mb = round(total_size / (1024 * 1024), 2)
-    
-    msg = [
-        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
-        "│",
-        f"├ 🟢 Version Extracted: <b>{version}</b>",
-        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
-        f"├ Changed Files Count: <b>{changed_files_count}</b>",
-        f"├ New Files Count: <b>{new_files_count}</b>",
-        "│"
-    ]
-
-    # Suffix theme patterns
-    themes = extract_theme_keywords(file_entries)
-    if themes:
-        msg.append("├ 🏷️ DETECTED THEMES:")
-        msg.append(f"│ <code>{', '.join(['#' + t for t in themes])}</code>")
-        msg.append("│")
-
-    msg.append("├ 📂 DISCOVERED FILES:")
-    max_visible_files = 15
-    for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
-        sz_kb = round(sz / 1024, 1)
-        if sz_kb >= 1024:
-            sz_display = f"{round(sz_kb / 1024, 2)} MB"
+            if old_files_map[file_id] != size: status = "Modified"
+            else: continue
         else:
-            sz_display = f"{sz_kb} KB"
-            
-        clean_fid = fid.split('/')[-1]
-        clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        
-        # Segment filename and sizes across two lines for structured alignment
-        msg.append(f"│ ▫️ {idx:02d}. {clean_fid_escaped}  ")
-        msg.append(f"│             ({stat}, {sz_display})")
-        
-    if len(file_entries) > max_visible_files:
-        msg.append(f"│ ▫️ ... and {len(file_entries) - max_visible_files} more files.")
-
+            status = "New"
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        file_name = file_id.split('/')[-1]
+        token = encode_token(download_url, file_name, 'application/octet-stream')
+        proxy_url = f"/api?action=stream&token={token}"
+        total_size += size
+        file_infos.append({
+            "fileName": file_id,
+            "size": size,
+            "url": proxy_url,
+            "status": status
+        })
     new_items = []
     try:
-        new_items = extract_new_game_items(version, new_text)
-    except Exception: pass
-
-    if new_items:
-        msg.append("│")
-        msg.append("├ ✨ NEW GAME ITEMS:")
-        msg.append("<blockquote>")
-        for idx, item in enumerate(new_items[:12], 1):
-            clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            msg.append(f"▫️ {clean_name}")
-            msg.append(f"      ID: <code>{item['id']}</code>")
-        if len(new_items) > 12:
-            msg.append(f"... and {len(new_items) - 12} more items.")
-        msg.append("</blockquote>")
-
-    msg.append("╰──────────────────────")
+        new_items = extract_new_game_items(active_version, new_text)
+    except Exception as e:
+        print(f"Error parsing game items hotfix: {e}")
+        
+    analysis = analyze_update_purpose(file_infos, new_items)
     
-    file_keyboard_mappings = {}
-    for file_id, stat, sz in file_entries[:5]:
-        mapping_id = hashlib.md5(f"{version}:{file_id}".encode('utf-8')).hexdigest()[:8]
-        suffix = None
-        for line in new_text.splitlines():
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 5 and parts[0].strip() == file_id:
-                suffix = parts[4].strip()
-                break
-        if suffix:
-            encoded = encode_suffix(suffix)
-            download_url = f"{base_url}{version}/gameassetbundles/{file_id}.{encoded}~3D"
-            BOT_TEMP_MAPPINGS[mapping_id] = {
-                "url": download_url,
-                "filename": file_id.split('/')[-1],
-                "version": version
-            }
-            file_keyboard_mappings[file_id] = mapping_id
-            
-    return "\n".join(msg), file_entries, file_keyboard_mappings
+    return jsonify({
+        "success": True,
+        "version": active_version,
+        "totalSize": total_size,
+        "files": file_infos,
+        "new_items": new_items,
+        "analysis": analysis
+    })
 
 def handle_extractor_response(response):
     if not response.ok:
@@ -1280,6 +1174,236 @@ def remove_pending_request(user_id):
     db["pending_requests"] = pending
     write_db_to_chat(OWNER_ID, db)
 
+def send_item_icons_to_chat(chat_id, new_items):
+    """Downloads newly detected item icons from CDN link and delivers them directly as photos."""
+    # Limit to 3 files to prevent Telegram rate limit issues
+    for item in new_items[:3]:
+        item_id = item.get("id")
+        item_name = item.get("name", "Unknown Item")
+        icon_url = item.get("icon_url")
+        if not item_id or not icon_url:
+            continue
+        try:
+            res = http_session.get(icon_url, timeout=12)
+            if res.status_code == 200:
+                url = f"{TELEGRAM_API}/sendPhoto"
+                files = {"photo": (f"{item_id}.png", res.content, "image/png")}
+                payload = {
+                    "chat_id": chat_id,
+                    "caption": f"✨ New Item Discovered: <b>{item_name}</b>\nID: <code>{item_id}</code>",
+                    "parse_mode": "HTML"
+                }
+                http_session.post(url, data=payload, files=files, timeout=15)
+        except Exception as e:
+            print(f"Failed delivering icon file for {item_id}: {e}")
+
+def run_miniupdate_extraction_details(version):
+    """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
+    new_text, active_version, base_url = get_file_info_data_exact(version)
+    if not new_text:
+        return f"❌ Version <b>{version}</b> not found.", None, {}
+
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+
+    fetched_maps = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps[v][0] for v in prev_versions if v in fetched_maps]
+
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: sz = int(parts[2])
+                except Exception: sz = 0
+                old_files_map[file_id] = sz
+
+    file_entries = []
+    total_size = 0 
+    new_files_count = 0
+    changed_files_count = 0
+
+    themes_count = {}
+    allowed_tags = ["sf49", "rank43", "pony49", "eightinf49", "hype44", "aug_ninth", "wolf_sheep", "uidrawshop"]
+
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str = parts[0].strip(), parts[2].strip()
+        try: size = int(size_str)
+        except Exception: size = 0
+        
+        status = None
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: 
+                status = "Modified"
+                changed_files_count += 1
+                total_size += size
+        else: 
+            status = "New"
+            new_files_count += 1
+            total_size += size
+            
+        if status:
+            file_entries.append((file_id, status, size))
+            file_lower = file_id.lower()
+            for tag in allowed_tags:
+                if tag in file_lower:
+                    themes_count[tag] = themes_count.get(tag, 0) + 1
+
+    size_mb = round(total_size / (1024 * 1024), 2)
+    
+    simple_file_list = [{"fileName": entry[0]} for entry in file_entries]
+    new_items = []
+    try:
+        new_items = extract_new_game_items(version, new_text)
+    except Exception: pass
+    
+    analysis = analyze_update_purpose(simple_file_list, new_items)
+    
+    msg = [
+        "<b>╭─📊 MINIUPDATE ANALYSIS ────</b>",
+        "│",
+        f"├ 🟢 Version Extracted: <b>{version}</b>",
+        f"├ MiniUpdate Size: <b>{size_mb} MB</b>",
+        f"├ Changed Files Count: <b>{changed_files_count}</b>",
+        f"├ New Files Count: <b>{new_files_count}</b>",
+        "│",
+        "├ 🧠 INTEL REPORT:",
+        f"│ <code>{analysis['summary']}</code>",
+        "│"
+    ]
+    
+    if themes_count:
+        msg.append("├ 🏷️ THEMATIC THEMES DETECTED:")
+        for tag, count in sorted(themes_count.items(), key=lambda x: x[1], reverse=True)[:5]:
+            msg.append(f"│ • Tag <b>#{tag.upper()}</b>: {count} matches")
+        msg.append("│")
+
+    msg.append("├ 📂 DISCOVERED FILES:")
+    msg.append("<blockquote>")
+    max_visible_files = 15
+    for idx, (fid, stat, sz) in enumerate(file_entries[:max_visible_files], 1):
+        sz_kb = round(sz / 1024, 1)
+        if sz_kb >= 1024:
+            sz_display = f"{round(sz_kb / 1024, 2)} MB"
+        else:
+            sz_display = f"{sz_kb} KB"
+            
+        clean_fid = fid.split('/')[-1]
+        clean_fid_escaped = clean_fid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        msg.append(f"▫️ {idx:02d}. <b>{clean_fid_escaped}</b>")
+        msg.append(f"      <i>({stat}, {sz_display})</i>")
+        
+    if len(file_entries) > max_visible_files:
+        msg.append(f"... and {len(file_entries) - max_visible_files} more files.")
+    msg.append("</blockquote>")
+
+    if new_items:
+        msg.append("│")
+        msg.append("├ ✨ NEW GAME ITEMS:")
+        msg.append("<blockquote>")
+        for idx, item in enumerate(new_items[:12], 1):
+            clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            msg.append(f"▫️ <a href=\"{item['icon_url']}\"><b>{clean_name}</b></a>")
+            msg.append(f"      ID: <code><i>{item['id']}</i></code>")
+        if len(new_items) > 12:
+            msg.append(f"... and {len(new_items) - 12} more items.")
+        msg.append("</blockquote>")
+
+    msg.append("╰──────────────────────")
+    
+    # Compile composite mesh-texture connections on the fly for zip buttons
+    file_keyboard_mappings = {}
+    meshes = [f[0] for f in file_entries if f[0].lower().endswith(".obj")]
+    textures = [f[0] for f in file_entries if any(f[0].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg"])]
+    
+    for m in meshes[:3]:
+        m_basename = m.split('/')[-1]
+        m_clean_name = os.path.splitext(m_basename)[0]
+        
+        comp_meshes = []
+        for other_m in meshes:
+            other_m_basename = other_m.split('/')[-1]
+            if check_name_similarity(m_clean_name, os.path.splitext(other_m_basename)[0]):
+                comp_meshes.append({
+                    "name": other_m_basename,
+                    "url": f"{base_url}{version}/gameassetbundles/{other_m}"
+                })
+                
+        comp_textures = []
+        for t in textures:
+            t_basename = t.split('/')[-1]
+            if check_name_similarity(m_clean_name, os.path.splitext(t_basename)[0]):
+                comp_textures.append({
+                    "name": t_basename,
+                    "url": f"{base_url}{version}/gameassetbundles/{t}"
+                })
+                
+        if comp_textures and len(comp_meshes) > 0:
+            comp_id = hashlib.md5(f"{version}:{m_clean_name}".encode('utf-8')).hexdigest()[:8]
+            BOT_TEMP_MAPPINGS[comp_id] = {
+                "type": "composite_zip",
+                "version": version,
+                "name": m_clean_name,
+                "mesh_assets": comp_meshes,
+                "texture_assets": comp_textures
+            }
+            # Attach keyboard actions directly
+            file_keyboard_mappings[m_basename] = f"zip_comp_{comp_id}"
+            
+    return "\n".join(msg), file_entries, file_keyboard_mappings
+
+def parse_bundle_subfiles(file_path_or_url, is_local_upload=False, upload_bytes=None, filename="bundle.unity3d"):
+    try:
+        if is_local_upload and upload_bytes:
+            files = {'asset_bundle': (filename, upload_bytes, 'application/octet-stream')}
+            res = http_session.post(EXTRACTOR_API_URL, files=files, timeout=45)
+        else:
+            encoded_url = base64.urlsafe_b64encode(file_path_or_url.encode('utf-8')).decode('utf-8')
+            res = http_session.get(f"{EXTRACTOR_API_URL}?bundle_url={encoded_url}", timeout=45)
+        
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("files", []) or data.get("assets", [])
+    except Exception as e:
+        print(f"Parse bundle processing failed: {e}")
+    return []
+
+def send_extracted_document_to_chat(chat_id, file_bytes, filename):
+    url = f"{TELEGRAM_API}/sendDocument"
+    files = {"document": (filename, file_bytes, 'application/octet-stream')}
+    payload = {"chat_id": chat_id}
+    try:
+        http_session.post(url, data=payload, files=files, timeout=45)
+    except Exception as e:
+         print(f"Error sending document: {e}")
+
+def clear_reply_markup(chat_id, message_id):
+    url = f"{TELEGRAM_API}/editMessageReplyMarkup"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "reply_markup": {"inline_keyboard": []}
+    }
+    try:
+        http_session.post(url, json=payload, timeout=5)
+    except Exception: pass
+
+def delete_message(chat_id, message_id):
+    url = f"{TELEGRAM_API}/deleteMessage"
+    try:
+        http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
+    except Exception: pass
+
 
 # ==========================================
 # Flask Controller & Explicit Webhook Routes
@@ -1289,7 +1413,7 @@ def remove_pending_request(user_id):
 @app.route('/webhook', methods=['GET', 'POST'])
 def telegram_webhook():
     if request.method == 'GET':
-        # Dynamic Webhook Registration Check
+        # Dynamic GET diagnostic and webhook registration on Vercel
         try:
             host = request.headers.get('Host')
             protocol = "https" if "localhost" not in host else "http"
@@ -1449,6 +1573,15 @@ def handle_bot_webhook():
                 try:
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
+                    
+                    # Group model-textures Zip action button directly
+                    for fname, action_data in file_keyboard_mappings.items():
+                        if action_data.startswith("zip_comp_"):
+                            comp_id = action_data.replace("zip_comp_", "")
+                            meta = BOT_TEMP_MAPPINGS.get(comp_id)
+                            if meta:
+                                keyboard.append([{"text": f"📦 Combined {meta['name']} Scene ZIP", "callback_data": f"zip_comp_{comp_id}"}])
+                                
                     if file_entries:
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
@@ -1460,9 +1593,11 @@ def handle_bot_webhook():
                         "parse_mode": "HTML",
                         "reply_markup": {"inline_keyboard": keyboard}
                     }, timeout=10)
-                    
-                    # Automatically compile and deliver item icons & visual asset bundles
-                    trigger_background_asset_delivery(chat_id, ver, file_entries)
+
+                    # Trigger dynamic delivery of discovered item icons if item details present
+                    new_items = extract_new_game_items(ver, get_file_info_data_exact(ver)[0])
+                    if new_items:
+                        send_item_icons_to_chat(chat_id, new_items)
                 except Exception:
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
@@ -1483,6 +1618,66 @@ def handle_bot_webhook():
                     send_extracted_document_to_chat(chat_id, zip_data.get_data(), f"FF_MiniUpdate_{ver}_Extracted.zip")
                 else:
                     send_message(chat_id, "❌ Archive generation failed.")
+
+            elif data.startswith("zip_comp_"):
+                comp_id = data.replace("zip_comp_", "")
+                http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Generating combined zip..."}, timeout=5)
+                
+                meta = BOT_TEMP_MAPPINGS.get(comp_id)
+                if meta:
+                    version = meta.get("version")
+                    comp_name = meta.get("name", "Composite_Asset")
+                    
+                    send_message(chat_id, f"⚙️ Compiling combined zip for <b>{comp_name}</b>. Downloading meshes and textures...", parse_mode="HTML")
+                    
+                    zip_io = io.BytesIO()
+                    files_added = 0
+                    
+                    def fetch_asset(item):
+                        name, url = item
+                        try:
+                            res_bytes = None
+                            if "token=" in url:
+                                token_match = re.search(r'token=([^&]+)', url)
+                                if token_match:
+                                    decoded = decode_token(token_match.group(1))
+                                    if decoded:
+                                        cache_key = decoded.get("cache_key")
+                                        if cache_key and cache_key in MEMORY_ASSET_CACHE:
+                                            res_bytes = MEMORY_ASSET_CACHE[cache_key]["content"]
+                                        else:
+                                            raw_res = http_session.get(decoded.get("url"), timeout=15)
+                                            if raw_res.status_code == 200:
+                                                res_bytes = raw_res.content
+                            if not res_bytes and url.startswith("http"):
+                                raw_res = http_session.get(url, timeout=15)
+                                if raw_res.status_code == 200:
+                                    res_bytes = raw_res.content
+                            return name, res_bytes
+                        except Exception:
+                            return name, None
+
+                    assets_to_fetch = []
+                    for mesh_item in meta.get("mesh_assets", []):
+                        assets_to_fetch.append((mesh_item["name"], mesh_item["url"]))
+                    for tex_item in meta.get("texture_assets", []):
+                        assets_to_fetch.append((tex_item["name"], tex_item["url"]))
+                        
+                    with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                            results = executor.map(fetch_asset, assets_to_fetch)
+                            for name, content in results:
+                                if content:
+                                    zf.writestr(name, content)
+                                    files_added += 1
+                                    
+                    if files_added > 0:
+                        zip_io.seek(0)
+                        send_extracted_document_to_chat(chat_id, zip_io.getvalue(), f"{comp_name}_Combined_Asset.zip")
+                    else:
+                        send_message(chat_id, "❌ Composite zip generation failed.")
+                else:
+                    send_message(chat_id, "❌ Session expired.")
 
             elif data.startswith("ext_bnd_"):
                 mapping_id = data.replace("ext_bnd_", "")
@@ -1689,37 +1884,16 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Dynamic link checks containing Android version or fileinfo link formats
+            # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
             version = extract_version_from_input(raw_text)
-            custom_base = extract_base_url_from_input(raw_text)
-            if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "LIVE LINK DETECTED" in raw_text):
-                sent_msg = send_message(chat_id, f"⏳ <b>Comparative Scan Auto-Triggered:</b> Analyzing miniupdate version <b>{version}</b>...", parse_mode="HTML")
-                
-                try:
-                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(version, custom_base)
-                    keyboard = []
-                    if file_entries:
-                        keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{version}"}])
-                    
-                    if sent_msg and sent_msg.get("ok"):
-                        sent_msg_id = sent_msg["result"]["message_id"]
-                        url = f"{TELEGRAM_API}/editMessageText"
-                        payload = {
-                            "chat_id": chat_id,
-                            "message_id": sent_msg_id,
-                            "text": detail_msg,
-                            "parse_mode": "HTML"
-                        }
-                        if keyboard:
-                            payload["reply_markup"] = {"inline_keyboard": keyboard}
-                        http_session.post(url, json=payload, timeout=10)
-                        
-                        # Automatically compile and deliver item icons & visual asset bundles
-                        trigger_background_asset_delivery(chat_id, version, file_entries, custom_base)
-                    else:
-                        send_message_with_keyboard(chat_id, detail_msg, {"inline_keyboard": keyboard}, parse_mode="HTML")
-                except Exception as e:
-                    print(f"Auto-trigger scan error: {e}")
+            if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "🟢 live link detected" in raw_text.lower()):
+                keyboard = [[{"text": f"🔍 Check Miniupdate {version}", "callback_data": f"check_ver_{version}"}]]
+                send_message_with_keyboard(chat_id, (
+                    "╭──────────────────────\n"
+                    "├ New MINIUPDATE Detected\n"
+                    f"├ Version: <b>{version}</b>\n"
+                    "╰──────────────────────"
+                ), {"inline_keyboard": keyboard}, parse_mode="HTML")
                 return jsonify({"status": "ok"}), 200
 
             # Access controls for private interaction commands
@@ -1746,7 +1920,6 @@ def handle_bot_webhook():
                     return jsonify({"status": "ok"}), 200
                 ver_input = parts[1].strip()
                 ver = extract_version_from_input(ver_input)
-                custom_base = extract_base_url_from_input(ver_input)
                 if not ver:
                     send_message(chat_id, "❌ Unable to extract a valid patch version string from the input.")
                     return jsonify({"status": "ok"}), 200
@@ -1759,9 +1932,19 @@ def handle_bot_webhook():
                 sent_msg_id = sent_msg["result"]["message_id"]
                 
                 try:
-                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver, custom_base)
+                    detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
+                    
+                    # Group model-textures Zip action button directly
+                    for fname, action_data in file_keyboard_mappings.items():
+                        if action_data.startswith("zip_comp_"):
+                            comp_id = action_data.replace("zip_comp_", "")
+                            meta = BOT_TEMP_MAPPINGS.get(comp_id)
+                            if meta:
+                                keyboard.append([{"text": f"📦 Combined {meta['name']} Scene ZIP", "callback_data": f"zip_comp_{comp_id}"}])
+                                
                     if file_entries:
+                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -1775,9 +1958,11 @@ def handle_bot_webhook():
                         payload["reply_markup"] = {"inline_keyboard": keyboard}
                         
                     http_session.post(url, json=payload, timeout=10)
-                    
-                    # Automatically compile and deliver item icons & visual asset bundles
-                    trigger_background_asset_delivery(chat_id, ver, file_entries, custom_base)
+
+                    # Trigger dynamic delivery of discovered item icons if item details present
+                    new_items = extract_new_game_items(ver, get_file_info_data_exact(ver)[0])
+                    if new_items:
+                        send_item_icons_to_chat(chat_id, new_items)
                 except Exception:
                     url = f"{TELEGRAM_API}/editMessageText"
                     http_session.post(url, json={
@@ -1842,7 +2027,7 @@ def handle_bot_webhook():
                     else:
                         send_message(chat_id, "❌ Replying message does not contain a file document attachment.")
                 else:
-                    send_message(chat_id, "❌ Reply to any asset file document in the group with '/extract'.")
+                    send_message(chat_id, "╭─❌ USAGE\n╰─Reply to any asset file document in the group with '/extract'.")
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
