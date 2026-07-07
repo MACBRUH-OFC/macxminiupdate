@@ -501,32 +501,6 @@ def analyze_update_purpose(files, new_items):
         "severity": "Visual Content" if "3D Visual Models" in categories else "System Synced"
     }
 
-def detect_dynamic_themes(file_entries):
-    """Scans file lists dynamically to identify recurring thematic tags without hardcoded presets."""
-    from collections import Counter
-    token_counts = Counter()
-    
-    generic_words = {
-        "gameassetbundles", "sound", "voice", "en", "audio", "vfx", "weapon", "assembly", "config", "patch",
-        "extracted", "mesh", "tex", "texture", "material", "animator", "controller", "prefab", "other",
-        "containers", "geometry", "skinnedmeshrenderer", "meshrenderer", "transform", "other", "resconf",
-        "resconfhotupdate", "matchreviewparam", "patchoptionalresmanager", "uidrawshop", "unlimited", "cardpool"
-    }
-    
-    for fid, _, _ in file_entries:
-        basename = fid.split('/')[-1]
-        parts = re.split(r'[\W_]+', basename)
-        for part in parts:
-            part_lower = part.lower()
-            if len(part_lower) >= 4 and part_lower not in generic_words:
-                token_counts[part_lower] += 1
-                
-    detected = []
-    for tag, count in token_counts.most_common(5):
-        if count >= 2 or any(char.isdigit() for char in tag):
-            detected.append((tag, count))
-    return detected
-
 def latest_version_logic():
     try:
         res = http_session.get(VERSION_API, timeout=5)
@@ -586,7 +560,7 @@ def check_update_logic():
             parts = line.split(',')
             if len(parts) >= 3:
                 file_id = parts[0].strip()
-                try: old_size = int(parts[2])
+                try: old_size = int(parts[3].strip() or parts[2].strip())
                 except Exception: old_size = 0
                 old_files_map[file_id] = old_size
     file_infos = []
@@ -595,10 +569,15 @@ def check_update_logic():
         if not line.strip(): continue
         parts = line.split(',')
         if len(parts) < 5: continue
-        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        file_id, suffix = parts[0].strip(), parts[4].strip()
+        
+        # Uses compressed size (download size) columns (index 3) inside update sizes mapping calculation
+        try: size = int(parts[3].strip())
+        except Exception:
+            try: size = int(parts[2].strip())
+            except Exception: size = 0
+            
         if not file_id or not suffix: continue
-        try: size = int(size_str)
-        except Exception: size = 0
         if file_id in old_files_map:
             if old_files_map[file_id] != size: status = "Modified"
             else: continue
@@ -688,16 +667,11 @@ def handle_extractor_response(response, bundle_url=None):
                 except Exception:
                     file_bytes = raw_val.encode('utf-8')
 
-        remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
-        if not remote_preview_url:
-            if not file_bytes:
-                file_bytes = b"{}"
-                detected_content_type = "application/json"
-            dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
-            remote_preview_url = f"https://local-placeholder/{dummy_hash}"
+        # Forced local caching endpoint mapping ensures browser dynamically extracts files on-demand
+        dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
+        local_preview_url = f"https://local-placeholder/{dummy_hash}"
 
-        # Attaches original source bundle context to keep stateless streaming token small
-        local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes, bundle_url=bundle_url)
+        local_cache_token = encode_token(local_preview_url, filename_str, detected_content_type, file_bytes, bundle_url=bundle_url)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
         
@@ -901,37 +875,60 @@ def stream_cache_logic(token):
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
         
-    if "content_b64" in decoded:
+    # Stateless extract fallback on-demand recovers asset bytes natively from original public cdn
+    bundle_url = decoded.get("bundle_url")
+    if bundle_url:
         try:
-            content = base64.b64decode(decoded["content_b64"])
-            if cache_key:
-                MEMORY_ASSET_CACHE[cache_key] = {
-                    "content": content,
-                    "filename": filename,
-                    "content_type": mime_type
-                }
-            response = Response(content, mimetype=mime_type)
-            response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
-            response.headers["Accept-Ranges"] = "bytes"
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
-        except Exception: pass
-        
-    # Stateless extract fallback on-demand
+            sub_files = parse_bundle_subfiles(bundle_url)
+            for sf in sub_files:
+                sf_name = sf.get("name") or sf.get("fileName") or ""
+                if sf_name == filename:
+                    structured_data = None
+                    for key in ["data", "properties", "fields", "json", "jsonData", "content"]:
+                        val = sf.get(key)
+                        if val is not None:
+                            if isinstance(val, (dict, list)):
+                                structured_data = val
+                                break
+                            elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
+                                try:
+                                    structured_data = json.loads(val)
+                                    break
+                                except Exception: pass
+                    
+                    file_bytes = b""
+                    if structured_data is not None:
+                        file_bytes = json.dumps(structured_data, indent=2, ensure_ascii=False).encode('utf-8')
+                    else:
+                        raw_val = sf.get("data", "")
+                        if isinstance(raw_val, str) and raw_val:
+                            try: file_bytes = base64.b64decode(raw_val)
+                            except Exception: file_bytes = raw_val.encode('utf-8')
+                            
+                    if file_bytes:
+                        MEMORY_ASSET_CACHE[cache_key] = {
+                            "content": file_bytes,
+                            "filename": filename,
+                            "content_type": mime_type
+                        }
+                        response = Response(file_bytes, mimetype=mime_type)
+                        response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+                        response.headers["Accept-Ranges"] = "bytes"
+                        response.headers["Access-Control-Allow-Origin"] = "*"
+                        return response
+        except Exception as e:
+            print(f"Stateless extraction fallback failed: {e}")
+
     remote_url = decoded.get("url")
-    if "local-placeholder" in remote_url:
-        # Re-fetch from extractor fallback when cache key is lost or cleared from stream
-        pass
-    elif remote_url:
+    if remote_url and remote_url.startswith("http") and "local-placeholder" not in remote_url:
         try:
             res = http_session.get(remote_url, timeout=15)
             if res.status_code == 200:
-                if cache_key:
-                    MEMORY_ASSET_CACHE[cache_key] = {
-                        "content": res.content,
-                        "filename": filename,
-                        "content_type": mime_type
-                    }
+                MEMORY_ASSET_CACHE[cache_key] = {
+                    "content": res.content,
+                    "filename": filename,
+                    "content_type": mime_type
+                }
                 response = Response(res.content, mimetype=mime_type)
                 response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
                 response.headers["Accept-Ranges"] = "bytes"
@@ -984,7 +981,7 @@ def bulk_zip_logic(version):
             parts = line.split(',')
             if len(parts) >= 3:
                 file_id = parts[0].strip()
-                try: old_size = int(parts[2])
+                try: old_size = int(parts[3].strip() or parts[2].strip())
                 except Exception: old_size = 0
                 old_files_map[file_id] = old_size
     targets = []
@@ -992,10 +989,14 @@ def bulk_zip_logic(version):
         if not line.strip(): continue
         parts = line.split(',')
         if len(parts) < 5: continue
-        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        file_id, suffix = parts[0].strip(), parts[4].strip()
+        
+        try: size = int(parts[3].strip())
+        except Exception:
+            try: size = int(parts[2].strip())
+            except Exception: size = 0
+            
         if not file_id or not suffix: continue
-        try: size = int(size_str)
-        except Exception: size = 0
         if file_id in old_files_map:
             if old_files_map[file_id] != size: pass
             else: continue
@@ -1037,7 +1038,6 @@ def bulk_zip_logic(version):
     response = Response(zip_io.getvalue(), mimetype='application/zip')
     response.headers["Content-Disposition"] = f'attachment; filename="FF_MiniUpdate_{active_version}_Extracted.zip"'
     return response
-
 
 # ==========================================
 # Telegram Bot Database & Webhook System
@@ -1216,7 +1216,7 @@ def send_item_icons_to_chat(chat_id, new_items):
                 files = {"photo": (f"{item_id}.png", res.content, "image/png")}
                 payload = {
                     "chat_id": chat_id,
-                    "caption": f"✨ New Item Discovered:\n<b>{item_name}</b>\nID: <code>{item_id}</code>",
+                    "caption": f"✨ New Item:\n<b>{item_name}</b>\nID: <code>{item_id}</code>",
                     "parse_mode": "HTML"
                 }
                 http_session.post(url, data=payload, files=files, timeout=15)
@@ -1247,7 +1247,7 @@ def run_miniupdate_extraction_details(version):
             parts = line.split(',')
             if len(parts) >= 3:
                 file_id = parts[0].strip()
-                try: sz = int(parts[2])
+                try: sz = int(parts[3].strip() or parts[2].strip())
                 except Exception: sz = 0
                 old_files_map[file_id] = sz
 
@@ -1260,9 +1260,11 @@ def run_miniupdate_extraction_details(version):
         if not line.strip(): continue
         parts = line.split(',')
         if len(parts) < 5: continue
-        file_id, size_str = parts[0].strip(), parts[2].strip()
+        file_id, size_str = parts[0].strip(), parts[3].strip() # Uses compressed update size column index (3)
         try: size = int(size_str)
-        except Exception: size = 0
+        except Exception:
+            try: size = int(parts[2].strip())
+            except Exception: size = 0
         
         status = None
         if file_id in old_files_map:
@@ -1288,9 +1290,6 @@ def run_miniupdate_extraction_details(version):
     
     analysis = analyze_update_purpose(simple_file_list, new_items)
 
-    # Dynamic thematic scanning logic
-    themes = detect_dynamic_themes(file_entries)
-
     # Category classifications for the bot
     categories = {"obj": 0, "png": 0, "json": 0, "other": 0}
     for fid, stat, sz in file_entries:
@@ -1313,11 +1312,14 @@ def run_miniupdate_extraction_details(version):
         "│"
     ]
 
-    if themes:
-        msg.append("├ 🏷️ THEMATIC THEMES DETECTED:")
-        for tag, count in themes:
-            msg.append(f"│ • Tag <b>#{tag.upper()}</b>: {count} matches")
-        msg.append("│")
+    # Grouped files category overview for Telegram
+    msg.append("├ 📁 CATEGORIES:")
+    msg.append("<blockquote>")
+    if categories["obj"] > 0: msg.append(f"📦 <b>Geometry & 3D Meshes:</b> {categories['obj']} meshes")
+    if categories["png"] > 0: msg.append(f"🎨 <b>Textures & Sprite Assets:</b> {categories['png']} sprites")
+    if categories["json"] > 0: msg.append(f"⚙️ <b>MonoBehaviour & GameData:</b> {categories['json']} configs")
+    if categories["other"] > 0: msg.append(f"📝 <b>Other Resources:</b> {categories['other']} files")
+    msg.append("</blockquote>")
 
     msg.append("├ 📂 DISCOVERED FILES:")
     msg.append("<blockquote>")
@@ -1901,7 +1903,7 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live link check containing Android version or fileinfo link formats
+            # Dynamic link checks containing Android version or fileinfo link formats (No slash limitation)
             version = extract_version_from_input(raw_text)
             if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "🟢 live link detected" in raw_text.lower()):
                 keyboard = [[{"text": f"🔍 Check Miniupdate {version}", "callback_data": f"check_ver_{version}"}]]
@@ -1913,7 +1915,7 @@ def handle_bot_webhook():
                 ), {"inline_keyboard": keyboard}, parse_mode="HTML")
                 return jsonify({"status": "ok"}), 200
 
-            # Access controls for private interaction commands
+            # Access controls for private chats
             if raw_text.startswith("/"):
                 if not is_action_permitted(chat_id, user_id):
                     if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract"):
@@ -1941,7 +1943,6 @@ def handle_bot_webhook():
                     send_message(chat_id, "❌ Unable to extract a valid patch version string from the input.")
                     return jsonify({"status": "ok"}), 200
                 
-                # Send live in-progress state first to feel active and responsive
                 sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
                 if not sent_msg or not sent_msg.get("ok"):
                     return jsonify({"status": "ok"}), 200
@@ -1952,7 +1953,6 @@ def handle_bot_webhook():
                     detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(ver)
                     keyboard = []
                     
-                    # Group model-textures Zip action button directly
                     for fname, action_data in file_keyboard_mappings.items():
                         if action_data.startswith("zip_comp_"):
                             comp_id = action_data.replace("zip_comp_", "")
@@ -1975,7 +1975,6 @@ def handle_bot_webhook():
                         
                     http_session.post(url, json=payload, timeout=10)
 
-                    # Trigger dynamic delivery of discovered item icons
                     new_items = extract_new_game_items(ver, get_file_info_data_exact(ver)[0])
                     if new_items:
                         send_item_icons_to_chat(chat_id, new_items)
@@ -2010,7 +2009,6 @@ def handle_bot_webhook():
                                     if sub_files:
                                         mapping_id = str(uuid.uuid4())[:8]
                                         
-                                        # Save dynamic mapping in local memory store to prevent database repinning spam
                                         BOT_TEMP_MAPPINGS[mapping_id] = {
                                             "url": dl_url,
                                             "filename": file_name
@@ -2043,7 +2041,7 @@ def handle_bot_webhook():
                     else:
                         send_message(chat_id, "❌ Replying message does not contain a file document attachment.")
                 else:
-                    send_message(chat_id, "❌ Reply to any asset file document in the group with '/extract'.")
+                    send_message(chat_id, "╭─❌ USAGE\n╰─Reply to any asset file document in the group with '/extract'.")
 
     except Exception as e:
         print(f"Error handling Telegram message: {e}")

@@ -798,7 +798,7 @@ function previewCategoryFolder(index, key) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
                 <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <canvas id="babylonCategoryCanvas" class="babylon-canvas-viewport"></canvas>
+                    <canvas id="babylonAssetCanvas" class="babylon-canvas-viewport"></canvas>
                 </div>
             </div>`;
         
@@ -911,7 +911,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             `;
             extractedData.composites.forEach(comp => {
                 sublistHtml += `
-                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
+                    <div class="flex flex-col p-2.5 bg-black/60 rounded-xl border border-yellow-500/10 hover:border-yellow-500/30 transition-all cursor-pointer text-left select-none" onclick="selectCompositeAsset('${encodeURIComponent(JSON.stringify(comp))}', this)">
                         <div class="flex items-center justify-between">
                             <span class="text-[10px] font-bold text-yellow-500 truncate"><i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>${comp.name}</span>
                             <span class="text-[8px] px-1.5 py-0.2 rounded border border-yellow-500/20 bg-yellow-500/5 text-yellow-400 uppercase tracking-wider font-mono">Assembly Ready</span>
@@ -1188,7 +1188,7 @@ async function selectFile(item, element) {
 
     document.getElementById('previewTargetWorkspace').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Multi-criteria checking: matches both filename extensions and metadata labels
+    // Multi-criteria checking matches both filename extensions and metadata labels
     const isImage = ['png','jpg','jpeg','webp','gif','bmp'].includes(ext) || lLabel.includes('texture') || lLabel.includes('sprite') || lLabel.includes('texture2d') || lLabel.includes('image');
     const isVideo = ['mp4','mkv','webm','avi','mov'].includes(ext) || lLabel.includes('video') || lLabel.includes('videoclip');
     const isAudio = ['mp3','wav','ogg','m4a','flac'].includes(ext) || lLabel.includes('audio') || lLabel.includes('audioclip');
