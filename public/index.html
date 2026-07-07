@@ -156,7 +156,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
 
                 <div id="wrapperManual" class="hidden w-full text-center">
-                    <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">Enter miniupdate Version</span>
+                    <span class="block text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-2">Enter miniupdate Version / URL</span>
                     <input type="text" id="inputVersion" class="input-text-nexus" placeholder="e.g. 1.128.9">
                 </div>
 
@@ -793,7 +793,7 @@ function previewCategoryFolder(index, key) {
             url: m.url,
             associated_textures: m.associated_textures || []
         }));
-        initBabylonMeshScene("babylonCategoryCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
+        initBabylonMeshScene("babylonAssetCanvas", firstMesh.url, (firstMesh.name || firstMesh.fileName).split('/').pop(), firstMesh.associated_textures || [], siblingParts);
     }
     else if (key === 'configs') {
         document.getElementById('mediaTitle').innerText = "Configurations Registry Matrix";

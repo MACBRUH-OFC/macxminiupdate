@@ -423,6 +423,192 @@ def find_references_in_json(obj, asset_names):
                     break
     return referenced
 
+def extract_version_from_input(input_str):
+    """Fuzzy regex matching system extracting clean target versions or fileinfo URLs."""
+    if not input_str:
+        return None
+    match = re.search(r'(?:/android/|android/|^)(\d+\.\d+\.\d+)', input_str.strip())
+    if match:
+        return match.group(1)
+    match_fallback = re.search(r'(\d+\.\d+\.\d+)', input_str)
+    if match_fallback:
+        return match_fallback.group(1)
+    return None
+
+def analyze_update_purpose(files, new_items):
+    categories = set()
+    highlights = []
+    
+    obj_count = sum(1 for f in files if f["fileName"].lower().endswith(".obj"))
+    png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]))
+    config_count = sum(1 for f in files if "config/" in f["fileName"].lower())
+    loc_count = sum(1 for f in files if "localization/" in f["fileName"].lower())
+    sound_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".ogg", ".wav", ".mp3"]))
+    
+    if obj_count > 0:
+        categories.add("3D Visual Models")
+        highlights.append(f"Injected {obj_count} high-fidelity 3D meshes")
+    if png_count > 0:
+        categories.add("High-Res Textures")
+        highlights.append(f"Added {png_count} render mapping sprites/textures")
+    if config_count > 0:
+        categories.add("Gameplay Config")
+        highlights.append("Modified gameplay attribute settings or balance rules")
+    if loc_count > 0:
+        categories.add("Localization / Texts")
+        highlights.append("Updated localized text strings")
+    if sound_count > 0:
+        categories.add("Audio Effects")
+        highlights.append(f"Updated {sound_count} acoustic assets/effects")
+        
+    weapon_skins = set()
+    emotes = set()
+    for f in files:
+        fname = f["fileName"].lower()
+        for g in ["aug", "m249", "ak47", "scar", "m1887", "mp5", "groza", "awm", "desert_eagle"]:
+            if g in fname:
+                weapon_skins.add(g.upper())
+        if "emote" in fname or "motion" in fname:
+            emotes.add(fname.split('/')[-1])
+            
+    if weapon_skins:
+        categories.add("Weapon Customization")
+        highlights.append(f"New cosmetics or parameters for: {', '.join(weapon_skins)}")
+    if emotes:
+        categories.add("Expressive Emotes")
+        highlights.append(f"New animation sequences: {', '.join(list(emotes)[:2])}")
+        
+    if new_items:
+        categories.add("Content Update")
+        bundle_count = sum(1 for i in new_items if i.get("is_bundle"))
+        if bundle_count > 0:
+            categories.add("Exclusive Costumes")
+            highlights.append(f"Discovered {bundle_count} item bundles")
+        item_names = [i["name"] for i in new_items[:3]]
+        highlights.append(f"Added new inventory assets: {', '.join(item_names)}")
+
+    if "Gameplay Config" in categories and len(categories) == 1:
+        summary = "This mini-update acts as a tactical hotfix modifying underlying server gameplay rules or parameters."
+    elif "3D Visual Models" in categories or "High-Res Textures" in categories:
+        summary = "This update introduces visual content enhancements, skin updates, and textures for localized events."
+        if weapon_skins:
+            summary += f" Specifically targeting visual attributes for weapon models ({', '.join(weapon_skins)})."
+    else:
+        summary = "This is a standard client synchronization maintenance patch coordinating game asset metadata rules."
+        
+    return {
+        "summary": summary,
+        "categories": list(categories) if categories else ["Maintenance Patch"],
+        "highlights": highlights,
+        "severity": "Visual Content" if "3D Visual Models" in categories else "System Synced"
+    }
+
+def latest_version_logic():
+    try:
+        res = http_session.get(VERSION_API, timeout=5)
+        data = res.json()
+        if data.get("success") and "remote_version" in data:
+            base_ver = data["remote_version"]
+            
+            candidates = [base_ver]
+            for step in [1, 2, 3]:
+                nxt = get_next_version(base_ver, step)
+                if nxt:
+                    candidates.append(nxt)
+            
+            fetched_maps = get_multiple_file_info_data(candidates)
+            
+            active_ver = base_ver
+            for cand in reversed(candidates):
+                if cand in fetched_maps:
+                    active_ver = cand
+                    break
+                    
+            target_ver = get_next_version(active_ver, 1)
+            
+            return jsonify({
+                "success": True, 
+                "current_version": active_ver, 
+                "target_version": target_ver
+            })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+    return jsonify({"success": False, "message": "Failed response lookup."}), 500
+
+def check_update_logic():
+    input_val = request.args.get('version', '').strip()
+    version = extract_version_from_input(input_val)
+    if not version:
+        return jsonify({"success": False, "message": "Incorrect version format or link entered"}), 400
+
+    new_text, active_version, base_url = get_file_info_data_exact(version)
+    if not new_text:
+        return jsonify({"success": False, "message": "Target version logs missing from server"}), 404
+        
+    prev_versions = []
+    current_temp = active_version
+    for _ in range(6):
+        prev_ver = get_previous_version(current_temp)
+        if not prev_ver: break
+        prev_versions.append(prev_ver)
+        current_temp = prev_ver
+        
+    fetched_maps_prev = get_multiple_file_info_data(prev_versions)
+    old_texts = [fetched_maps_prev[v][0] for v in prev_versions if v in fetched_maps_prev]
+    old_files_map = {}
+    for old_text in reversed(old_texts):
+        for line in old_text.splitlines():
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                file_id = parts[0].strip()
+                try: old_size = int(parts[2])
+                except Exception: old_size = 0
+                old_files_map[file_id] = old_size
+    file_infos = []
+    total_size = 0
+    for line in new_text.splitlines():
+        if not line.strip(): continue
+        parts = line.split(',')
+        if len(parts) < 5: continue
+        file_id, size_str, suffix = parts[0].strip(), parts[2].strip(), parts[4].strip()
+        if not file_id or not suffix: continue
+        try: size = int(size_str)
+        except Exception: size = 0
+        if file_id in old_files_map:
+            if old_files_map[file_id] != size: status = "Modified"
+            else: continue
+        else:
+            status = "New"
+        encoded = encode_suffix(suffix)
+        download_url = f"{base_url}{active_version}/gameassetbundles/{file_id}.{encoded}~3D"
+        file_name = file_id.split('/')[-1]
+        token = encode_token(download_url, file_name, 'application/octet-stream')
+        proxy_url = f"/api?action=stream&token={token}"
+        total_size += size
+        file_infos.append({
+            "fileName": file_id,
+            "size": size,
+            "url": proxy_url,
+            "status": status
+        })
+    new_items = []
+    try:
+        new_items = extract_new_game_items(active_version, new_text)
+    except Exception as e:
+        print(f"Error parsing game items hotfix: {e}")
+        
+    analysis = analyze_update_purpose(file_infos, new_items)
+    
+    return jsonify({
+        "success": True,
+        "version": active_version,
+        "totalSize": total_size,
+        "files": file_infos,
+        "new_items": new_items,
+        "analysis": analysis
+    })
+
 def handle_extractor_response(response):
     if not response.ok:
         try: err_data = response.json()
@@ -542,7 +728,7 @@ def handle_extractor_response(response):
                         mesh_to_materials[rm_name] = rmat_name
             except Exception: pass
 
-    # 3. Associate Textures with Meshes using the compiled metadata path
+    # 3. Associate Textures with Meshes using Compiled reference pathways
     for m in meshes:
         m_name = os.path.splitext(os.path.basename(m["fileName"]))[0].lower()
         matched_textures = []
@@ -1575,19 +1761,17 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live fileinfo URL hook matching (strict format checking for the link tracker bot's output message)
-            if raw_text and "LIVE LINK DETECTED" in raw_text and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text):
-                version_match = re.search(r'/android/(\d+\.\d+\.\d+)/', raw_text)
-                if version_match:
-                    ver = version_match.group(1)
-                    keyboard = [[{"text": f"🔍 Check Miniupdate {ver}", "callback_data": f"check_ver_{ver}"}]]
-                    send_message_with_keyboard(chat_id, (
-                        "╭──────────────────────\n"
-                        "├ New MINIUPDATE\n"
-                        f"├ Version: <b>{ver}</b>\n"
-                        "╰──────────────────────"
-                    ), {"inline_keyboard": keyboard}, parse_mode="HTML")
-                    return jsonify({"status": "ok"}), 200
+            # Dynamic link check containing Android version or fileinfo link formats
+            version = extract_version_from_input(raw_text)
+            if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower()):
+                keyboard = [[{"text": f"🔍 Check Miniupdate {version}", "callback_data": f"check_ver_{version}"}]]
+                send_message_with_keyboard(chat_id, (
+                    "╭──────────────────────\n"
+                    "├ New MINIUPDATE\n"
+                    f"├ Version: <b>{version}</b>\n"
+                    "╰──────────────────────"
+                ), {"inline_keyboard": keyboard}, parse_mode="HTML")
+                return jsonify({"status": "ok"}), 200
 
             # Access controls for private interaction commands
             if raw_text.startswith("/"):
@@ -1609,9 +1793,13 @@ def handle_bot_webhook():
             elif raw_text.startswith("/check"):
                 parts = [p.strip() for p in raw_text.split(" ") if p.strip()]
                 if len(parts) < 2:
-                    send_message(chat_id, "╭─❌ USAGE\n╰─/check [version]\n\nExample: /check 1.126.6")
+                    send_message(chat_id, "╭─❌ USAGE\n╰─/check [version / fileinfo URL]\n\nExample: /check 1.128.9")
                     return jsonify({"status": "ok"}), 200
-                ver = parts[1].strip()
+                ver_input = parts[1].strip()
+                ver = extract_version_from_input(ver_input)
+                if not ver:
+                    send_message(chat_id, "❌ Unable to extract a valid patch version string from the input.")
+                    return jsonify({"status": "ok"}), 200
                 
                 # Send live in-progress state first to feel active and responsive
                 sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
