@@ -26,7 +26,10 @@ GROUP_ID = "-1002252657532"
 OWNER_ID = 1745313119
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# Instantiate Flask and expose standard WSGI/Serverless handles to Vercel
 app = Flask(__name__)
+application = app
+handler = app
 
 # Connection pooling with high limits for faster processing
 http_session = requests.Session()
