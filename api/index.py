@@ -269,7 +269,7 @@ def find_previous_itemhotfix_content(active_version):
     return ""
 
 def get_item_type_label(item_id, item_name=""):
-    """Determines item categorization label based on the standard prefix definitions of Garena item IDs."""
+    """Deduces cosmetic/functional layout categories strictly based on Garena ID and naming signatures."""
     item_id_str = str(item_id).strip()
     prefix = item_id_str[:3]
     
@@ -395,44 +395,44 @@ def extract_new_game_items(active_version, new_text):
         item["icon_url"] = f"https://dl.cdn.freefiremobile.com/live/ABHotUpdates/IconCDN/other/{item['id']}.png"
         
     parents = []
-    singletons = []
+    subs = []
     for item in raw_parsed_items:
         name_lower = item["name"].lower()
         if any(k in name_lower for k in ["bundle", "pack", "box", "chest", "crate"]) or str(item["id"]).startswith("710"):
             parents.append(item)
         else:
-            singletons.append(item)
+            subs.append(item)
             
     grouped_items = []
-    used_singletons = set()
+    used_subs = set()
     
     for parent in parents:
         parent_name = parent["name"]
         clean_parent_core = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', parent_name, flags=re.IGNORECASE).strip()
         
         parts = []
-        for sing in singletons:
-            sing_name = sing["name"]
+        for sub in subs:
+            sub_name = sub["name"]
             is_match = False
             
-            bracket_match = re.match(r'^\[([^\]]+)\]', sing_name)
+            bracket_match = re.match(r'^\[([^\]]+)\]', sub_name)
             if bracket_match:
                 bracket_content = bracket_match.group(1).strip().lower()
                 if bracket_content in parent_name.lower() or parent_name.lower().startswith(bracket_content):
                     is_match = True
                     
             if not is_match and len(clean_parent_core) > 2:
-                if clean_parent_core.lower() in sing_name.lower() or sing_name.lower().startswith(clean_parent_core.lower()):
+                if clean_parent_core.lower() in sub_name.lower() or sub_name.lower().startswith(clean_parent_core.lower()):
                     is_match = True
                     
             if is_match:
                 parts.append({
-                    "id": sing["id"],
-                    "name": sing["name"],
-                    "text_id": sing["text_id"],
-                    "icon_url": sing["icon_url"]
+                    "id": sub["id"],
+                    "name": sub["name"],
+                    "text_id": sub["text_id"],
+                    "icon_url": sub["icon_url"]
                 })
-                used_singletons.add(sing["id"])
+                used_subs.add(sub["id"])
                 
         grouped_items.append({
             "id": parent["id"],
@@ -443,13 +443,13 @@ def extract_new_game_items(active_version, new_text):
             "is_bundle": True if parts else False
         })
         
-    for sing in singletons:
-        if sing["id"] not in used_singletons:
+    for sub in subs:
+        if sub["id"] not in used_subs:
             grouped_items.append({
-                "id": sing["id"],
-                "name": sing["name"],
-                "text_id": sing["text_id"],
-                "icon_url": sing["icon_url"],
+                "id": sub["id"],
+                "name": sub["name"],
+                "text_id": sub["text_id"],
+                "icon_url": sub["icon_url"],
                 "parts": [],
                 "is_bundle": False
             })
@@ -530,7 +530,7 @@ def analyze_update_purpose(files, new_items):
     
     if obj_count > 0:
         categories.add("3D Visual Models")
-        highlights.append(f"Injected {obj_count} 3D meshes")
+        highlights.append(f"Injected {obj_count} meshes")
     if png_count > 0:
         categories.add("Textures")
         highlights.append(f"Added {png_count} render mapping sprites/textures")
