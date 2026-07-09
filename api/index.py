@@ -736,7 +736,7 @@ def handle_extractor_response(response, bundle_url=None):
                 if isinstance(val, (dict, list)):
                     structured_data = val
                     break
-                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith(["[") or val.strip().startswith("[")):
+                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
                     try:
                         structured_data = json.loads(val)
                         break
@@ -1004,7 +1004,7 @@ def stream_cache_logic(token):
                             if isinstance(val, (dict, list)):
                                 structured_data = val
                                 break
-                            elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith(["[") or val.strip().startswith("[")):
+                            elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
                                 try:
                                     structured_data = json.loads(val)
                                     break
