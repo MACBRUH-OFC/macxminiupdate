@@ -439,6 +439,7 @@ def extract_new_game_items(active_version, new_text):
     grouped_items = []
     used_subs = set()
     
+    # Priority 1: Match children based on primary bracket matches and itemhotfix database relations
     for main in parents:
         main_name = main["name"]
         clean_main_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', main_name, flags=re.IGNORECASE).strip()
@@ -448,12 +449,19 @@ def extract_new_game_items(active_version, new_text):
             sub_name = sub["name"]
             is_match = False
             
-            bracket_match = re.match(r'^\[([^\]]+)\]', sub_name)
-            if bracket_match:
-                bracket_content = bracket_match.group(1).strip().lower()
-                if bracket_content in main_name.lower() or main_name.lower().startswith(bracket_content):
-                    is_match = True
-                    
+            # 1a. Match sub-asset direct inclusion in parent's config row
+            if sub["id"] in main.get("row_parts", []) or main["id"] in sub.get("row_parts", []):
+                is_match = True
+                
+            # 1b. Match bracket groupings
+            if not is_match:
+                bracket_match = re.match(r'^\[([^\]]+)\]', sub_name)
+                if bracket_match:
+                    bracket_content = bracket_match.group(1).strip().lower()
+                    if bracket_content in main_name.lower() or main_name.lower().startswith(bracket_content):
+                        is_match = True
+                        
+            # 1c. Match prefix semantic similarities
             if not is_match and len(clean_main_prefix) > 2:
                 if clean_main_prefix.lower() in sub_name.lower() or sub_name.lower().startswith(clean_main_prefix.lower()):
                     is_match = True
@@ -476,6 +484,34 @@ def extract_new_game_items(active_version, new_text):
             "is_bundle": True if parts else False
         })
         
+    # Priority 2: Run sequential index fallback logic for Voice Tracks that had no exact semantic matches
+    voice_pack_parents = [p for p in parents if str(p["id"]).startswith("710") and "voice" in p["name"].lower()]
+    voice_tracks_orphans = [s for s in subs if str(s["id"]).startswith("921") and s["id"] not in used_subs]
+    
+    if voice_pack_parents and voice_tracks_orphans:
+        voice_pack_parents.sort(key=lambda x: int(x["id"]))
+        voice_tracks_orphans.sort(key=lambda x: int(x["id"]))
+        
+        num_packs = len(voice_pack_parents)
+        num_tracks = len(voice_tracks_orphans)
+        
+        for idx, track in enumerate(voice_tracks_orphans):
+            parent_idx = min(int(idx * num_packs / num_tracks), num_packs - 1)
+            target_parent = voice_pack_parents[parent_idx]
+            
+            for p_item in grouped_items:
+                if p_item["id"] == target_parent["id"]:
+                    p_item["parts"].append({
+                        "id": track["id"],
+                        "name": track["name"],
+                        "text_id": track["text_id"],
+                        "icon_url": track["icon_url"]
+                    })
+                    p_item["is_bundle"] = True
+                    used_subs.add(track["id"])
+                    break
+        
+    # Priority 3: Output remaining items as standalones
     for sub in subs:
         if sub["id"] not in used_subs:
             grouped_items.append({
@@ -561,62 +597,58 @@ def analyze_update_purpose(files, new_items):
     loc_count = sum(1 for f in files if "localization/" in f["fileName"].lower())
     sound_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".ogg", ".wav", ".mp3"]))
     
+    voice_pack_names = [i["name"] for i in new_items if "voice pack" in i["name"].lower() or get_item_type_label(i["id"], i["name"]) == "Voice Pack"]
+    costume_names = [i["name"] for i in new_items if any(k in i["name"].lower() for k in ["bundle", "suit", "costume"]) or get_item_type_label(i["id"], i["name"]) == "Costume Bundle"]
+    emote_names = [i["name"] for i in new_items if "emote" in i["name"].lower() or get_item_type_label(i["id"], i["name"]) == "Emote"]
+    vehicle_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Vehicle Skin"]
+    
+    summary_parts = []
+    
+    if voice_pack_names:
+        categories.add("Voice Packs")
+        summary_parts.append(f"Injected new Voice Packs ({', '.join(voice_pack_names[:2])})")
+    if costume_names:
+        categories.add("Exclusive Costumes")
+        summary_parts.append(f"Added premium costume bundles ({', '.join(costume_names[:2])})")
+    if emote_names:
+        categories.add("Expressive Emotes")
+        summary_parts.append(f"Released animation emotes ({', '.join(emote_names[:2])})")
+    if vehicle_names:
+        categories.add("Vehicle Skins")
+        summary_parts.append(f"Added premium vehicle themes ({', '.join(vehicle_names[:2])})")
+        
     if obj_count > 0:
         categories.add("3D Visual Models")
-        highlights.append(f"Injected {obj_count} meshes")
+        highlights.append(f"Integrated {obj_count} high-fidelity 3D meshes")
     if png_count > 0:
         categories.add("Textures")
-        highlights.append(f"Added {png_count} render mapping sprites/textures")
-    if config_count > 0:
-        categories.add("Gameplay Config")
-        highlights.append("Modified gameplay attribute settings or balance rules")
-    if loc_count > 0:
-        categories.add("Localization / Texts")
-        highlights.append("Updated localized text strings")
+        highlights.append(f"Updated {png_count} render/sprite files")
     if sound_count > 0:
         categories.add("Audio Effects")
-        highlights.append(f"Updated {sound_count} acoustic assets/effects")
+        highlights.append(f"Injected {sound_count} acoustic/voice voice lines")
+    if config_count > 0:
+        categories.add("Gameplay Config")
+        highlights.append("Adjusted game mechanics/parameter curves")
         
-    weapon_skins = set()
-    emotes = set()
-    for f in files:
-        fname = f["fileName"].lower()
-        for g in ["aug", "m249", "ak47", "scar", "m1887", "mp5", "groza", "awm", "desert_eagle"]:
-            if g in fname:
-                weapon_skins.add(g.upper())
-        if "emote" in fname or "motion" in fname:
-            emotes.add(fname.split('/')[-1])
-            
-    if weapon_skins:
-        categories.add("Weapon Customization")
-        highlights.append(f"New cosmetics or parameters for: {', '.join(weapon_skins)}")
-    if emotes:
-        categories.add("Expressive Emotes")
-        highlights.append(f"New animation sequences: {', '.join(list(emotes)[:2])}")
-        
-    if new_items:
-        categories.add("Content Update")
-        bundle_count = sum(1 for i in new_items if i.get("is_bundle"))
-        if bundle_count > 0:
-            categories.add("Exclusive Costumes")
-            highlights.append(f"Discovered {bundle_count} item bundles")
-        item_names = [i["name"] for i in new_items[:3]]
-        highlights.append(f"Added new inventory assets: {', '.join(item_names)}")
-
-    if "Gameplay Config" in categories and len(categories) == 1:
-        summary = "This mini-update acts as a tactical hotfix modifying underlying server gameplay rules or parameters."
-    elif "3D Visual Models" in categories or "Textures" in categories:
-        summary = "This update introduces visual content enhancements, skin updates, and textures for localized events."
-        if weapon_skins:
-            summary += f" Specifically targeting visual attributes for weapon models ({', '.join(weapon_skins)})."
+    if summary_parts:
+        summary = "This update introduces new visual and audio content: " + ", ".join(summary_parts) + "."
+        if highlights:
+            summary += " This is supported by the addition of " + " and ".join(highlights[:2]) + "."
     else:
-        summary = "This is a standard client synchronization maintenance patch coordinating game asset metadata rules."
-        
+        if obj_count > 0 or png_count > 0:
+            summary = f"This is a visual theme update deploying {obj_count} meshes and {png_count} texture frames."
+        elif sound_count > 0:
+            summary = f"This is an audio sync update adding {sound_count} sound files/voice tracks."
+        elif config_count > 0:
+            summary = "This is a technical system calibration patch adjusting gameplay configurations."
+        else:
+            summary = "This is a standard server synchronization maintenance patch coordinating game asset metadata rules."
+
     return {
         "summary": summary,
         "categories": list(categories) if categories else ["Maintenance Patch"],
         "highlights": highlights,
-        "severity": "Visual Content" if "3D Visual Models" in categories else "System Synced"
+        "severity": "Feature Drop" if summary_parts else "Maintenance Update"
     }
 
 def format_bytes_python(bytes_val):
@@ -797,7 +829,6 @@ def handle_extractor_response(response, bundle_url=None):
             dummy_hash = hashlib.md5(filename_str.encode('utf-8')).hexdigest()
             remote_preview_url = f"https://local-placeholder/{dummy_hash}"
 
-        # Attaches original source bundle context to keep stateless streaming token small
         local_cache_token = encode_token(remote_preview_url, filename_str, detected_content_type, file_bytes, bundle_url=bundle_url)
         decoded = decode_token(local_cache_token)
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
@@ -814,16 +845,14 @@ def handle_extractor_response(response, bundle_url=None):
         asset["url"] = local_proxy_route
         asset["fileName"] = filename_str
         asset["label"] = detected_content_type
-        asset["size"] = len(file_bytes)  # Evaluates and populates precise file lengths
+        asset["size"] = len(file_bytes)
         processed_assets.append(asset)
 
-    # Separate assets by visual groups to scan data reference connections
     meshes = [a for a in processed_assets if a["fileName"].lower().endswith(".obj")]
     textures = [a for a in processed_assets if any(a["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"])]
     materials = [a for a in processed_assets if "material" in a["fileName"].lower() or "material" in (a.get("type") or "").lower()]
     renderers = [a for a in processed_assets if "renderer" in a["fileName"].lower() or "renderer" in (a.get("type") or "").lower()]
 
-    # 1. Parse Materials to find referenced textures
     material_to_textures = {}
     for mat in materials:
         mat_name = os.path.splitext(os.path.basename(mat["fileName"]))[0].lower()
@@ -837,7 +866,6 @@ def handle_extractor_response(response, bundle_url=None):
                     material_to_textures[mat_name] = referenced
             except Exception: pass
 
-    # 2. Parse Renderers to map meshes to materials
     mesh_to_materials = {}
     for rend in renderers:
         rend_cache_key = rend["url"].split("token=")[-1]
@@ -854,7 +882,6 @@ def handle_extractor_response(response, bundle_url=None):
                         mesh_to_materials[rm_name] = rmat_name
             except Exception: pass
 
-    # 3. Associate Textures with Meshes using Compiled reference pathways
     for m in meshes:
         m_name = os.path.splitext(os.path.basename(m["fileName"]))[0].lower()
         matched_textures = []
@@ -874,7 +901,6 @@ def handle_extractor_response(response, bundle_url=None):
                     
         m["associated_textures"] = matched_textures
 
-    # Group sibling parts for concurrent rendering using semantic checks
     composites = []
     used_meshes_in_composites = set()
     
@@ -918,7 +944,6 @@ def handle_extractor_response(response, bundle_url=None):
                 "preview_summary": f"Unified assembly of {len(all_composite_meshes)} structural mesh layers and {len(comp_textures)} mapped shader textures."
             })
 
-    # Group categorized explorer categories cleanly
     categories = {
         "3d_models": [m for m in meshes if m["fileName"] not in used_meshes_in_composites],
         "textures": textures,
@@ -1384,23 +1409,22 @@ def send_item_icons_to_chat(chat_id, new_items):
         category = get_item_type_label(item["id"], item["name"])
         
         caption = (
-            f"• <u>New {category}:</u>\n\n"
+            f"• <b><u>New {category}:</u></b>\n\n"
             f"<b>{item['name']}</b>\n"
             f"ID: <code>{item['id']}</code>\n"
         )
         
-        if item["is_bundle"] and item["parts"]:
-            subtitle = "Voices:" if "voice" in category.lower() else "Bundle Components:"
-            caption += f"\n<i>{subtitle}</i>\n"
-            caption += "<blockquote>"
-            
-            parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
-            
+        if item["parts"]:
+            # Check if this parent acts as a nested voice structure
+            is_voice = "voice" in category.lower()
             for part in item["parts"]:
+                sub_label = "Voice" if is_voice else "Part"
+                parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
                 clean_part_display = clean_sub_item_name(part["name"], parent_prefix)
-                caption += f"▫️ <i>{clean_part_display}</i>\nID: <code>{part['id']}</code>\n"
-            caption += "</blockquote>"
-            
+                caption += f"\n<b><u>{sub_label}:</u></b>\n"
+                caption += f"<i>{clean_part_display}</i>\n"
+                caption += f"ID: <code>{part['id']}</code>\n"
+                
         if len(caption) > 1000:
             caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
             
