@@ -334,7 +334,6 @@ pipelineTabs.addEventListener("click", (e) => {
     }
 });
 
-// Explicit exclusive lists toggler
 packageTabs.addEventListener("click", (e) => {
     const target = e.target.closest(".tab-btn");
     if (!target) return;
@@ -495,7 +494,6 @@ extractBtn.onclick = async () => {
             }
         }
 
-        // Render Insight Report if present
         if (data.analysis) {
             document.getElementById('insightSummaryText').innerText = data.analysis.summary || "";
             const catContainer = document.getElementById('insightCategories');
@@ -670,7 +668,6 @@ function toggleSubFolder(folderId, buttonEl, trayIndex) {
     const folder = document.getElementById(folderId);
     const arrow = buttonEl.querySelector('.fa-chevron-down');
     
-    // Collapse other folders inside this tray exclusively
     const activeTray = document.getElementById(`tray-${trayIndex}`);
     if (activeTray) {
         activeTray.querySelectorAll('[id^="folder-"]').forEach(otherFolder => {
@@ -856,6 +853,32 @@ function previewCategoryFolder(index, key) {
     }
 }
 
+function json_parse_clean(str) {
+    try {
+        let cleaned = str.replace(/\/\/.*/g, '');
+        cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
+        return JSON.parse(cleaned);
+    } catch (e) {
+        return JSON.parse(str);
+    }
+}
+
+function triggerDirectSiblingPreview(encodedUrl, encodedName, type) {
+    const url = decodeURIComponent(encodedUrl);
+    const name = decodeURIComponent(encodedName);
+    let label = "Unknown";
+    if (type === 'TEXTURE') label = "image/png";
+    else if (type === 'CONFIGURATION') label = "application/json";
+    
+    selectFile({
+        id: url,
+        name: name,
+        label: label,
+        associatedTextures: [],
+        compositeParts: []
+    }, null);
+}
+
 function renderInteractiveJSONTree(obj, container, searchTerm = "") {
     function buildNode(key, value, path) {
         const type = Array.isArray(value) ? 'array' : typeof value;
@@ -882,11 +905,11 @@ function renderInteractiveJSONTree(obj, container, searchTerm = "") {
         if (hasChildren) {
             nodeHtml += `
                 <div class="flex items-start gap-1 cursor-pointer hover:bg-zinc-900/40 py-0.5 rounded px-1 transition-all" onclick="toggleTreeNode(this)">
-                    <i class="fa-solid fa-chevron-down text-[7px] text-zinc-500 mt-1.5 transition-transform" style="transform: rotate(-90deg);"></i>
+                    <i class="fa-solid fa-chevron-right text-[10px] transform transition-transform duration-200 mt-1" style="transform: rotate(90deg);"></i>
                     <span class="text-yellow-500 font-bold">${key}:</span>
                     <span class="text-zinc-500 font-mono text-[9px]">${valPreview}</span>
                 </div>
-                <div class="hidden border-l border-zinc-900/60 ml-1.5 pl-2 space-y-0.5">
+                <div class="border-l border-zinc-900/60 ml-1.5 pl-2 space-y-0.5">
             `;
             
             if (Array.isArray(value)) {
@@ -971,13 +994,13 @@ function renderInteractivePlainList(text, container, searchTerm = "") {
 
 window.toggleTreeNode = function(headerEl) {
     const children = headerEl.nextElementSibling;
-    const arrow = headerEl.querySelector('.fa-chevron-down');
+    const arrow = headerEl.querySelector('.fa-chevron-right');
     if (children.classList.contains('hidden')) {
         children.classList.remove('hidden');
-        arrow.style.transform = 'rotate(0deg)';
+        arrow.style.transform = 'rotate(90deg)';
     } else {
         children.classList.add('hidden');
-        arrow.style.transform = 'rotate(-90deg)';
+        arrow.style.transform = 'rotate(0deg)';
     }
 };
 
@@ -1007,7 +1030,7 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
     });
 
     tray.style.display = "block";
-    arrow.style.transform = "rotate(185deg)";
+    arrow.style.transform = "rotate(180deg)";
 
     if (sublist.children.length > 0) return;
 
@@ -1235,15 +1258,15 @@ async function selectFile(item, element) {
         }
 
         initBabylonMeshScene("babylonAssetCanvas", liveSourceData, item.name, item.associatedTextures || [], item.compositeParts || []);
-    } 
+    }
     else if (isImage) {
         mediaBox.innerHTML = `
-            <div class="custom-player-wrapper h-full">
-                <div class="aspect-16-9-viewport full-viewport-mesh">
-                    <img src="${liveSourceData}" class="pixelated-render">
+            <div class="custom-player-wrapper h-full justify-center items-center">
+                <div class="aspect-16-9-viewport bg-checkerboard flex items-center justify-center p-2 rounded-lg border border-zinc-900/60 w-full flex-1">
+                    <img src="${liveSourceData}" class="pixelated-render shadow-lg max-h-full max-w-full">
                 </div>
             </div>`;
-    } 
+    }
     else if (isVideo) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
@@ -1254,21 +1277,17 @@ async function selectFile(item, element) {
                     <video id="customVideoPlayer" src="${liveSourceData}" class="w-full h-full object-contain"></video>
                 </div>
                 <div class="custom-control-bar">
-                    <input type="range" id="videoTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                    <span id="videoTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <button id="videoPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                            <i class="fa-solid fa-play"></i>
-                        </button>
-                    </div>
+                    <input type="range" id="videoSlider" class="player-progress-slider" min="0" max="100" value="0">
+                    <button id="videoPlayBtn" class="text-white hover:text-yellow-500 transition-colors"><i class="fa-solid fa-play"></i></button>
+                    <span id="videoTime" class="text-xs font-mono text-zinc-400">00:00 / 00:00</span>
                 </div>
             </div>`;
-        initCustomVideoController();
-    } 
+        initCustomVideoPlayer();
+    }
     else if (isAudio) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper relative">
-                <div class="aspect-16-9-viewport relative">
+                <div class="aspect-16-9-viewport relative bg-zinc-950/40">
                     <div id="audioCenterOverlay" class="center-play-overlay">
                         <div class="center-play-btn-circle"><i class="fa-solid fa-play text-lg"></i></div>
                     </div>
@@ -1276,17 +1295,13 @@ async function selectFile(item, element) {
                     <audio id="customAudioPlayer" src="${liveSourceData}" crossorigin="anonymous" class="hidden"></audio>
                 </div>
                 <div class="custom-control-bar">
-                    <input type="range" id="audioTimeline" class="player-progress-slider" value="0" min="0" max="100">
-                    <span id="audioTimeLabel" class="text-[9px] font-mono text-zinc-500 select-none pr-2 flex-shrink-0">00:00</span>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <button id="audioPlayBtn" class="text-zinc-400 hover:text-[#ffde00] transition-all text-xs bg-zinc-900 border border-zinc-800 w-7 h-7 rounded-md flex items-center justify-center shadow-inner">
-                            <i class="fa-solid fa-play"></i>
-                        </button>
-                    </div>
+                    <input type="range" id="audioSlider" class="player-progress-slider" min="0" max="100" value="0">
+                    <button id="audioPlayBtn" class="text-white hover:text-yellow-500 transition-colors"><i class="fa-solid fa-play"></i></button>
+                    <span id="audioTime" class="text-xs font-mono text-zinc-400">00:00 / 00:00</span>
                 </div>
             </div>`;
-        initCustomAudioController();
-    } 
+        initCustomAudioPlayer();
+    }
     else if (isBinary && !isText) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full">
@@ -1338,7 +1353,7 @@ async function selectFile(item, element) {
 
             const sanitizedCheck = processedTextString.trim().toLowerCase();
             if (sanitizedCheck.startsWith('<!doc') || sanitizedCheck.startsWith('<html') || sanitizedCheck.startsWith('<head') || processedTextString.includes('<body')) {
-                throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset file data.");
+                throw new Error("Loop detection active: Server returned a fallback HTML routing document instead of raw asset data.");
             }
 
             try {
@@ -1523,85 +1538,83 @@ function initBabylonMeshScene(canvasId, modelUrl, filename, associatedTextures =
 
 function resizeBabylonViewportMatrix() { if (babylonEngine) babylonEngine.resize(); }
 
-function initCustomVideoController() {
+function initCustomVideoPlayer() {
     const video = document.getElementById('customVideoPlayer');
     const playBtn = document.getElementById('videoPlayBtn');
-    const centerOverlay = document.getElementById('videoCenterOverlay');
-    const timeline = document.getElementById('videoTimeline');
-    const timeLabel = document.getElementById('videoTimeLabel');
-    let isDragging = false;
-
-    function executeToggleAction() {
-        if(video.ended) { video.currentTime = 0; video.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
-        else if(video.paused) { video.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
-        else { video.pause(); playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-play text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); }
-    }
-    playBtn.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
-    centerOverlay.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
+    const overlay = document.getElementById('videoCenterOverlay');
+    const slider = document.getElementById('videoSlider');
+    const timeLabel = document.getElementById('videoTime');
     
-    video.ontimeupdate = () => { 
-        if(!video.duration || isDragging) return; 
-        timeline.value = (video.currentTime / video.duration) * 100; 
-        timeLabel.innerText = formatTimeMetrics(video.currentTime); 
-    };
-    video.onended = () => { 
-        playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; 
-        centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; 
-        centerOverlay.classList.remove('playing-hide'); 
-    };
-    
-    timeline.oninput = () => { 
-        isDragging = true;
-        if(video.duration) {
-            video.currentTime = (timeline.value / 100) * video.duration; 
-            timeLabel.innerText = formatTimeMetrics(video.currentTime);
+    function toggle() {
+        if (video.paused) {
+            video.play();
+            playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+            overlay.classList.add('playing-hide');
+        } else {
+            video.pause();
+            playBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+            overlay.classList.remove('playing-hide');
         }
+    }
+    
+    playBtn.onclick = toggle;
+    overlay.onclick = toggle;
+    
+    video.ontimeupdate = () => {
+        if (!video.duration) return;
+        const percent = (video.currentTime / video.duration) * 100;
+        slider.value = percent;
+        timeLabel.innerText = `${formatTimeMetrics(video.currentTime)} / ${formatTimeMetrics(video.duration)}`;
     };
-    timeline.onchange = () => { isDragging = false; };
+    
+    slider.oninput = () => {
+        if (!video.duration) return;
+        video.currentTime = (slider.value / 100) * video.duration;
+    };
 }
 
-function initCustomAudioController() {
+function initCustomAudioPlayer() {
     const audio = document.getElementById('customAudioPlayer');
     const playBtn = document.getElementById('audioPlayBtn');
-    const centerOverlay = document.getElementById('audioCenterOverlay');
-    const timeline = document.getElementById('audioTimeline');
-    const timeLabel = document.getElementById('audioTimeLabel');
+    const overlay = document.getElementById('audioCenterOverlay');
+    const slider = document.getElementById('audioSlider');
+    const timeLabel = document.getElementById('audioTime');
     const canvas = document.getElementById('audioVisualizerCanvas');
     const ctx = canvas.getContext('2d');
-    let isDragging = false;
-
+    
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-    function executeToggleAction() {
-        if(!audioCtx) { initAudioContextEngine(audio, canvas, ctx); }
-        if(audio.ended) { audio.currentTime = 0; audio.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
-        else if(audio.paused) { audio.play(); playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`; centerOverlay.classList.add('playing-hide'); }
-        else { audio.pause(); playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`; centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-play text-lg"></i>`; centerOverlay.classList.remove('playing-hide'); }
-    }
-    playBtn.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
-    centerOverlay.onclick = (e) => { e.stopPropagation(); executeToggleAction(); };
     
-    audio.ontimeupdate = () => { 
-        if(!audio.duration || isDragging) return; 
-        timeline.value = (audio.currentTime / audio.duration) * 100; 
-        timeLabel.innerText = formatTimeMetrics(audio.currentTime); 
-    };
-    audio.onended = () => { 
-        playBtn.innerHTML = `<i class="fa-solid fa-rotate-right"></i>`; 
-        centerOverlay.querySelector('.center-play-btn-circle').innerHTML = `<i class="fa-solid fa-rotate-right text-lg"></i>`; 
-        centerOverlay.classList.remove('playing-hide'); 
-    };
-    
-    timeline.oninput = () => { 
-        isDragging = true;
-        if(audio.duration) {
-            audio.currentTime = (timeline.value / 100) * audio.duration; 
-            timeLabel.innerText = formatTimeMetrics(audio.currentTime);
+    function toggle() {
+        if (!audioCtx) {
+            initAudioContextEngine(audio, canvas, ctx);
         }
+        if (audio.paused) {
+            audio.play();
+            playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+            overlay.classList.add('playing-hide');
+        } else {
+            audio.pause();
+            playBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+            overlay.classList.remove('playing-hide');
+        }
+    }
+    
+    playBtn.onclick = toggle;
+    overlay.onclick = toggle;
+    
+    audio.ontimeupdate = () => {
+        if (!audio.duration) return;
+        const percent = (audio.currentTime / audio.duration) * 100;
+        slider.value = percent;
+        timeLabel.innerText = `${formatTimeMetrics(audio.currentTime)} / ${formatTimeMetrics(audio.duration)}`;
     };
-    timeline.onchange = () => { isDragging = false; };
+    
+    slider.oninput = () => {
+        if (!audio.duration) return;
+        audio.currentTime = (slider.value / 100) * audio.duration;
+    };
 }
 
 function initAudioContextEngine(audioElement, canvas, ctx) {

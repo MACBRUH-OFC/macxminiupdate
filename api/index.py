@@ -665,7 +665,7 @@ def handle_extractor_response(response, bundle_url=None):
                 if isinstance(val, (dict, list)):
                     structured_data = val
                     break
-                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith("[")):
+                elif isinstance(val, str) and (val.strip().startswith("{") or val.strip().startswith(["[") or val.strip().startswith("[")):
                     try:
                         structured_data = json.loads(val)
                         break
@@ -1243,29 +1243,68 @@ def remove_pending_request(user_id):
     write_db_to_chat(OWNER_ID, db)
 
 def send_item_icons_to_chat(chat_id, new_items):
-    """Downloads all newly parsed item icons and delivers them directly as cleanly formatted Telegram text messages with inline image link preview cards."""
-    for item in new_items:
+    """Delivers newly parsed item icons elegantly as grouped grid-like media albums to avoid chat clutter."""
+    if not new_items:
+        return
+        
+    fallback_logo = "https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png"
+    
+    def verify_and_prepare(item):
         item_id = item.get("id")
         item_name = item.get("name", "Unknown Item")
         icon_url = item.get("icon_url")
         if not item_id or not icon_url:
-            continue
+            return None
+        
+        # Verify if icon URL serves active image bytes, else fall back to Garena branding assets
         try:
-            # High-fidelity, emoji-free structured visual representation block
-            text_payload = (
-                f"<b>{item_name}</b>\n"
-                f"ID: <a href=\"{icon_url}\">{item_id}</a>"
+            res = http_session.head(icon_url, timeout=2.5)
+            if res.status_code != 200:
+                icon_url = fallback_logo
+        except Exception:
+            icon_url = fallback_logo
+            
+        return {
+            "id": item_id,
+            "name": item_name,
+            "icon_url": icon_url
+        }
+
+    # Verify link state concurrently to maintain fast extraction rates
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(new_items))) as executor:
+        verified_results = list(executor.map(verify_and_prepare, new_items))
+        
+    valid_items = [v for v in verified_results if v is not None]
+    if not valid_items:
+        return
+
+    # Deliver images in beautiful, cohesive media grids of up to 10 photos
+    batch_size = 10
+    for i in range(0, len(valid_items), batch_size):
+        batch = valid_items[i : i + batch_size]
+        media_group = []
+        
+        for item in batch:
+            caption = (
+                f"✨ <b>{item['name']}</b>\n"
+                f"🆔 ID: <code>{item['id']}</code>"
             )
-            url = f"{TELEGRAM_API}/sendMessage"
+            media_group.append({
+                "type": "photo",
+                "media": item["icon_url"],
+                "caption": caption,
+                "parse_mode": "HTML"
+            })
+            
+        try:
+            url = f"{TELEGRAM_API}/sendMediaGroup"
             payload = {
                 "chat_id": chat_id,
-                "text": text_payload,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False  # Crucial: Must be False so Telegram displays the embedded icon as an inline layout preview
+                "media": json.dumps(media_group)
             }
-            http_session.post(url, json=payload, timeout=10)
+            http_session.post(url, json=payload, timeout=25)
         except Exception as e:
-            print(f"Error sending item connection to Telegram chat: {e}")
+            print(f"Error delivering grouped album batch: {e}")
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
