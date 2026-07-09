@@ -624,15 +624,15 @@ function renderItemList() {
                     <div class="flex items-center gap-2 min-w-0 flex-1">
                         <img src="${part.icon_url}" class="w-7 h-7 object-contain rounded bg-black border border-zinc-900 flex-shrink-0" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
                         <div class="min-w-0 flex-1 text-left">
-                            <p class="text-[10px] font-bold text-zinc-400 truncate hover:text-[#ffde00] transition-colors">${part.name}</p>
+                            <p class="text-[10px] font-bold text-zinc-400 truncate hover:text-[#ffde00] transition-colors"><i>${part.name}</i></p>
                             <p class="text-[8px] text-zinc-600 font-mono">ID: ${part.id}</p>
                         </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0" onclick="event.stopPropagation();">
-                        <button onclick="copySingleField('${part.name.replace(/'/g, "\\'")}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Voice Track Text">
+                        <button onclick="copySingleField('${part.name.replace(/'/g, "\\'")}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Component Text">
                             <i class="fa-regular fa-comment text-[8px]"></i>
                         </button>
-                        <button onclick="copySingleField('${part.id}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Voice ID">
+                        <button onclick="copySingleField('${part.id}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Component ID">
                             <i class="fa-solid fa-hashtag text-[8px]"></i>
                         </button>
                     </div>
@@ -641,7 +641,7 @@ function renderItemList() {
 
             partsHtml = `
                 <div class="bg-black/40 border border-zinc-950 rounded-lg p-2 mt-1 space-y-1">
-                    <p class="text-[8px] font-black text-zinc-500 uppercase tracking-wider mb-1 text-left">Voice Components & Tracks</p>
+                    <p class="text-[8px] font-black text-zinc-500 uppercase tracking-wider mb-1 text-left">Bundle Components & Tracks</p>
                     <div class="space-y-1">${partRows}</div>
                 </div>
             `;
@@ -1652,6 +1652,14 @@ function initAudioContextEngine(audioElement, canvas, ctx) {
         }
     }
     drawFullSymmetricWaves();
+}
+
+function copySingleField(val) {
+    navigator.clipboard.writeText(val).then(() => {
+        showToast(`Copied: ${val}`);
+    }).catch(() => {
+        showToast("Copy failed", false);
+    });
 }
 
 function formatTimeMetrics(secs) {

@@ -367,7 +367,7 @@ def extract_new_game_items(active_version, new_text):
     
     for main in mains:
         main_name = main["name"]
-        clean_main_prefix = re.sub(r'\s+(bundle|pack|voice\s+pack|box|chest|crate)\b', '', main_name, flags=re.IGNORECASE).strip()
+        clean_main_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', main_name, flags=re.IGNORECASE).strip()
         
         parts = []
         for sub in subs:
@@ -1319,7 +1319,7 @@ def send_item_icons_to_chat(chat_id, new_items):
                     f"📦 <b>Pack Components:</b>\n"
                 )
                 for part in item["parts"]:
-                    caption += f"▫️ <code>{part['name']}</code>\n      ID: <code>{part['id']}</code>\n"
+                    caption += f"▫️ <i>{part['name']}</i> - <code>{part['id']}</code>\n"
             else:
                 caption = (
                     f"✨ <b>{item['name']}</b>\n"
@@ -1328,7 +1328,7 @@ def send_item_icons_to_chat(chat_id, new_items):
                 
             # Truncate to Telegram's limits safely
             if len(caption) > 1000:
-                caption = caption[:960] + "\n\n▫️ <i>Truncated due to limits...</i>"
+                caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
                 
             media_group.append({
                 "type": "photo",
@@ -1471,7 +1471,7 @@ def run_miniupdate_extraction_details(version):
                 msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
                 for part in item["parts"][:6]:
                     clean_part_name = part['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                    msg.append(f"      ▫️ <code>{clean_part_name}</code> (<code>{part['id']}</code>)")
+                    msg.append(f"      ▫️ <i>{clean_part_name}</i> (<code>{part['id']}</code>)")
                 if len(item["parts"]) > 6:
                     msg.append(f"      ▫️ ... and {len(item['parts']) - 6} more parts.")
             else:
