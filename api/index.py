@@ -322,6 +322,7 @@ def extract_new_game_items(active_version, new_text):
         matches = re.findall(r'<l\s+[^>]*id="([^"]+)"[^>]*\ben="([^"]+)"', lochotfix_content)
         for name_id, en_val in matches:
             translations[name_id] = en_val
+            
     raw_parsed_items = []
     lines = itemhotfix_content.splitlines()
     if len(lines) > 2:
@@ -341,51 +342,77 @@ def extract_new_game_items(active_version, new_text):
                 raw_parsed_items.append({
                     "id": item_id,
                     "text_id": text_id,
-                    "row_parts": parts
+                    "row_parts": parts,
+                    "name": ""
                 })
+                
     for item in raw_parsed_items:
         text_id = item["text_id"]
         resolved_name = translations.get(text_id, text_id)
         if not resolved_name: resolved_name = f"Item {item['id']}"
         item["name"] = resolved_name
         item["icon_url"] = f"https://dl.cdn.freefiremobile.com/live/ABHotUpdates/IconCDN/other/{item['id']}.png"
-    bundles = []
-    non_bundles = []
+        
+    mains = []
+    subs = []
     for item in raw_parsed_items:
-        if "bundle" in item["name"].lower(): bundles.append(item)
-        else: non_bundles.append(item)
+        name_lower = item["name"].lower()
+        if any(k in name_lower for k in ["bundle", "pack", "box", "chest", "crate"]):
+            mains.append(item)
+        else:
+            subs.append(item)
+            
     grouped_items = []
-    used_non_bundles = set()
-    for bundle in bundles:
-        base_name = re.sub(r'\s+bundle\b', '', bundle['name'], flags=re.IGNORECASE).strip()
+    used_subs = set()
+    
+    for main in mains:
+        main_name = main["name"]
+        clean_main_prefix = re.sub(r'\s+(bundle|pack|voice\s+pack|box|chest|crate)\b', '', main_name, flags=re.IGNORECASE).strip()
+        
         parts = []
-        for nb in non_bundles:
-            if base_name.lower() in nb['name'].lower() or nb['name'].lower().startswith(base_name.lower()):
+        for sub in subs:
+            sub_name = sub["name"]
+            is_match = False
+            
+            bracket_match = re.match(r'^\[([^\]]+)\]', sub_name)
+            if bracket_match:
+                bracket_content = bracket_match.group(1).strip().lower()
+                if bracket_content in main_name.lower() or main_name.lower().startswith(bracket_content):
+                    is_match = True
+                    
+            if not is_match and len(clean_main_prefix) > 2:
+                if clean_main_prefix.lower() in sub_name.lower() or sub_name.lower().startswith(clean_main_prefix.lower()):
+                    is_match = True
+                    
+            if is_match:
                 parts.append({
-                    "id": nb["id"],
-                    "name": nb["name"],
-                    "text_id": nb["text_id"],
-                    "icon_url": nb["icon_url"]
+                    "id": sub["id"],
+                    "name": sub["name"],
+                    "text_id": sub["text_id"],
+                    "icon_url": sub["icon_url"]
                 })
-                used_non_bundles.add(nb['id'])
+                used_subs.add(sub["id"])
+                
         grouped_items.append({
-            "id": bundle["id"],
-            "name": bundle["name"],
-            "text_id": bundle["text_id"],
-            "icon_url": bundle["icon_url"],
+            "id": main["id"],
+            "name": main["name"],
+            "text_id": main["text_id"],
+            "icon_url": main["icon_url"],
             "parts": parts,
-            "is_bundle": True
+            "is_bundle": True if parts else False
         })
-    for nb in non_bundles:
-        if nb['id'] not in used_non_bundles:
+        
+    for sub in subs:
+        if sub["id"] not in used_subs:
             grouped_items.append({
-                "id": nb["id"],
-                "name": nb["name"],
-                "text_id": nb["text_id"],
-                "icon_url": nb["icon_url"],
+                "id": sub["id"],
+                "name": sub["name"],
+                "text_id": sub["text_id"],
+                "icon_url": sub["icon_url"],
                 "parts": [],
                 "is_bundle": False
             })
+            
     return grouped_items
 
 def check_name_similarity(name1, name2):
@@ -462,9 +489,9 @@ def analyze_update_purpose(files, new_items):
     
     if obj_count > 0:
         categories.add("3D Visual Models")
-        highlights.append(f"Injected {obj_count} high-fidelity 3D meshes")
+        highlights.append(f"Injected {obj_count} 3D meshes")
     if png_count > 0:
-        categories.add("High-Res Textures")
+        categories.add("Textures")
         highlights.append(f"Added {png_count} render mapping sprites/textures")
     if config_count > 0:
         categories.add("Gameplay Config")
@@ -504,7 +531,7 @@ def analyze_update_purpose(files, new_items):
 
     if "Gameplay Config" in categories and len(categories) == 1:
         summary = "This mini-update acts as a tactical hotfix modifying underlying server gameplay rules or parameters."
-    elif "3D Visual Models" in categories or "High-Res Textures" in categories:
+    elif "3D Visual Models" in categories or "Textures" in categories:
         summary = "This update introduces visual content enhancements, skin updates, and textures for localized events."
         if weapon_skins:
             summary += f" Specifically targeting visual attributes for weapon models ({', '.join(weapon_skins)})."
@@ -1255,8 +1282,7 @@ def send_item_icons_to_chat(chat_id, new_items):
         icon_url = item.get("icon_url")
         if not item_id or not icon_url:
             return None
-        
-        # Verify if icon URL serves active image bytes, else fall back to Garena branding assets
+            
         try:
             res = http_session.head(icon_url, timeout=2.5)
             if res.status_code != 200:
@@ -1267,10 +1293,11 @@ def send_item_icons_to_chat(chat_id, new_items):
         return {
             "id": item_id,
             "name": item_name,
-            "icon_url": icon_url
+            "icon_url": icon_url,
+            "parts": item.get("parts", []),
+            "is_bundle": item.get("is_bundle", False)
         }
 
-    # Verify link state concurrently to maintain fast extraction rates
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(new_items))) as executor:
         verified_results = list(executor.map(verify_and_prepare, new_items))
         
@@ -1285,10 +1312,24 @@ def send_item_icons_to_chat(chat_id, new_items):
         media_group = []
         
         for item in batch:
-            caption = (
-                f"✨ <b>{item['name']}</b>\n"
-                f"🆔 ID: <code>{item['id']}</code>"
-            )
+            if item["is_bundle"] and item["parts"]:
+                caption = (
+                    f"🎁 <b>{item['name']}</b>\n"
+                    f"🆔 ID: <code>{item['id']}</code>\n\n"
+                    f"📦 <b>Pack Components:</b>\n"
+                )
+                for part in item["parts"]:
+                    caption += f"▫️ <code>{part['name']}</code>\n      ID: <code>{part['id']}</code>\n"
+            else:
+                caption = (
+                    f"✨ <b>{item['name']}</b>\n"
+                    f"🆔 ID: <code>{item['id']}</code>"
+                )
+                
+            # Truncate to Telegram's limits safely
+            if len(caption) > 1000:
+                caption = caption[:960] + "\n\n▫️ <i>Truncated due to limits...</i>"
+                
             media_group.append({
                 "type": "photo",
                 "media": item["icon_url"],
@@ -1379,7 +1420,6 @@ def run_miniupdate_extraction_details(version):
         elif l_fid.endswith(".json"): categories["json"] += 1
         else: categories["other"] += 1
 
-    # Stylized, premium formatting utilizing combination underlines, bolding and blockquote guides 
     msg = [
         "<b>╭─📊 <u>MINIUPDATE ANALYSIS</u> ────</b>",
         "│",
@@ -1393,7 +1433,6 @@ def run_miniupdate_extraction_details(version):
         "│"
     ]
 
-    # Category summaries block
     msg.append("├ 📁 <b><u>CATEGORIES SUMMARY:</u></b>")
     msg.append("<blockquote>")
     if categories["obj"] > 0: msg.append(f"📦 <b>Geometry &amp; 3D Meshes:</b> <code>{categories['obj']} meshes</code>")
@@ -1427,9 +1466,17 @@ def run_miniupdate_extraction_details(version):
         msg.append("<blockquote>")
         for idx, item in enumerate(new_items[:12], 1):
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            # EmbedsCDN link in active summary text block
-            msg.append(f"▫️ <b>{clean_name}</b>")
-            msg.append(f"      ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
+            if item.get("parts"):
+                msg.append(f"🎁 <b>{clean_name}</b>")
+                msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
+                for part in item["parts"][:6]:
+                    clean_part_name = part['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    msg.append(f"      ▫️ <code>{clean_part_name}</code> (<code>{part['id']}</code>)")
+                if len(item["parts"]) > 6:
+                    msg.append(f"      ▫️ ... and {len(item['parts']) - 6} more parts.")
+            else:
+                msg.append(f"▫️ <b>{clean_name}</b>")
+                msg.append(f"      ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
         if len(new_items) > 12:
             msg.append(f"... and {len(new_items) - 12} more items.")
         msg.append("</blockquote>")

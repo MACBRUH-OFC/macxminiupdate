@@ -219,7 +219,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
                 </div>
                 <div class="flex items-center gap-2 p-1.5 bg-black/40 rounded-lg border border-zinc-950/40">
                     <div class="text-amber-400 flex-shrink-0">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"></path></svg>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 01-13.803-3.7l3.181 3.182m0-4.991v4.99"></path></svg>
                     </div>
                     <div class="min-w-0">
                         <span class="block text-[7px] font-black text-zinc-500 uppercase leading-none">Modified</span>
@@ -411,6 +411,14 @@ function copyItemInfo(id, name) {
     });
 }
 
+function copySingleField(val) {
+    navigator.clipboard.writeText(val).then(() => {
+        showToast(`Copied: ${val}`);
+    }).catch(() => {
+        showToast("Copy failed", false);
+    });
+}
+
 function resetOutputWorkspace() {
     activeCache = [];
     activeNewItems = [];
@@ -466,7 +474,7 @@ extractBtn.onclick = async () => {
     try {
         const res = await fetch(`/api/update?version=${encodeURIComponent(targetVersion)}`);
         const data = await res.json();
-        if(!data.success) throw new Error(data.message || "Failed parsing target channels.");
+        if(!data.success) throw new Error(data.message || data.error || "Failed parsing target channels.");
 
         activeCache = data.files || [];
         activeNewItems = data.new_items || [];
@@ -501,7 +509,7 @@ extractBtn.onclick = async () => {
             if (data.analysis.categories) {
                 data.analysis.categories.forEach(cat => {
                     const badge = document.createElement('span');
-                    badge.className = "text-[7px] font-black px-1.5 py-0.5 rounded border border-yellow-500/10 bg-yellow-500/5 text-yellow-500 uppercase tracking-wider";
+                    badge.className = "text-[7px] font-black px-1.5 py-0.5 rounded border border-yellow-500/10 bg-yellow-500/5 text-yellow-400 uppercase tracking-wider";
                     badge.innerText = cat;
                     catContainer.appendChild(badge);
                 });
@@ -575,15 +583,15 @@ function renderList() {
                         </div>
                     </div>
                 </div>
-                <div class="flex items-center gap-2 flex-shrink-0 ml-2">
-                    <button class="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-yellow-500" title="Extract and download Zip package bundle" onclick="interceptDownloadZip(event, '${encodeURIComponent(item.url)}')">
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <button class="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-white" onclick="interceptDownloadZip(event, '${encodeURIComponent(item.url)}')">
                         <i class="fa-solid fa-file-zipper text-[10px]"></i>
                     </button>
                     <i id="arrow-${index}" class="fa-solid fa-chevron-down text-[9px] text-zinc-600 transition-transform"></i>
                 </div>
             </div>
             <div class="accordion-tray" id="tray-${index}">
-                <div class="text-[10px] text-zinc-500 py-2 text-center" id="loader-${index}"><i class="fa-solid fa-cog fa-spin text-yellow-500 mr-2"></i>Running Extraction Pipeline API...</div>
+                <div class="text-[10px] text-zinc-500 py-2 text-center" id="loader-${index}"><i class="fa-solid fa-circle-notch fa-spin text-yellow-500 mr-2"></i>Running Extraction Pipeline API...</div>
                 <div class="space-y-1.5" id="sublist-${index}"></div>
             </div>
         `;
@@ -612,17 +620,20 @@ function renderItemList() {
         let partsHtml = "";
         if (item.parts && item.parts.length > 0) {
             const partRows = item.parts.map(part => `
-                <div class="flex items-center justify-between p-1.5 rounded-lg border border-zinc-950 min-w-0 select-none">
+                <div class="flex items-center justify-between p-1.5 rounded-lg border border-zinc-950 min-w-0 select-none cursor-pointer hover:border-yellow-500/25 transition-all" onclick="copyItemInfo('${part.id}', '${part.name.replace(/'/g, "\\'")}')">
                     <div class="flex items-center gap-2 min-w-0 flex-1">
                         <img src="${part.icon_url}" class="w-7 h-7 object-contain rounded bg-black border border-zinc-900 flex-shrink-0" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
                         <div class="min-w-0 flex-1 text-left">
-                            <p class="text-[10px] font-bold text-zinc-400 truncate">${part.name}</p>
+                            <p class="text-[10px] font-bold text-zinc-400 truncate hover:text-[#ffde00] transition-colors">${part.name}</p>
                             <p class="text-[8px] text-zinc-600 font-mono">ID: ${part.id}</p>
                         </div>
                     </div>
-                    <div class="flex gap-1 ml-2 flex-shrink-0">
-                        <button onclick="copyItemInfo('${part.id}', '${part.name.replace(/'/g, "\\'")}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Details">
-                            <i class="fa-regular fa-copy text-[9px]"></i>
+                    <div class="flex gap-1 ml-2 flex-shrink-0" onclick="event.stopPropagation();">
+                        <button onclick="copySingleField('${part.name.replace(/'/g, "\\'")}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Voice Track Text">
+                            <i class="fa-regular fa-comment text-[8px]"></i>
+                        </button>
+                        <button onclick="copySingleField('${part.id}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Voice ID">
+                            <i class="fa-solid fa-hashtag text-[8px]"></i>
                         </button>
                     </div>
                 </div>
@@ -630,7 +641,7 @@ function renderItemList() {
 
             partsHtml = `
                 <div class="bg-black/40 border border-zinc-950 rounded-lg p-2 mt-1 space-y-1">
-                    <p class="text-[8px] font-black text-zinc-500 uppercase tracking-wider mb-1 text-left">Bundle Components</p>
+                    <p class="text-[8px] font-black text-zinc-500 uppercase tracking-wider mb-1 text-left">Voice Components & Tracks</p>
                     <div class="space-y-1">${partRows}</div>
                 </div>
             `;
@@ -640,12 +651,12 @@ function renderItemList() {
 
         row.innerHTML = `
             <div class="flex items-center justify-between min-w-0 gap-2">
-                <div class="flex items-center gap-3 min-w-0 flex-1">
+                <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" onclick="copyItemInfo('${item.id}', '${cleanNameEscaped}')">
                     <div class="w-12 h-12 bg-black border border-zinc-800 rounded-lg overflow-hidden flex items-center justify-center flex-shrink-0">
                         <img src="${item.icon_url}" class="w-full h-full object-contain" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
                     </div>
                     <div class="min-w-0 flex-1 text-left">
-                        <p class="text-xs font-bold text-white leading-tight">${item.name}</p>
+                        <p class="text-xs font-bold text-white leading-tight hover:text-[#ffde00] transition-colors">${item.name}</p>
                         <p class="text-[9px] text-zinc-500 font-mono mt-0.5">ID: ${item.id}</p>
                     </div>
                 </div>
