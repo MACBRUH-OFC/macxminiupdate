@@ -308,7 +308,8 @@ def clean_sub_item_name(sub_name, parent_prefix=""):
     cleaned = re.sub(r'^\[[^\]]+\]\s*', '', sub_name).strip()
     if parent_prefix:
         esc_prefix = re.escape(parent_prefix)
-        cleaned = re.sub(rf'^{esc_prefix}\s*[\(\-\s]*', '', cleaned, flags=re.IGNORECASE).strip()
+        pattern = re.compile(rf'^{esc_prefix}\s*[\(\-\s]*', re.IGNORECASE)
+        cleaned = pattern.sub('', cleaned).strip()
         cleaned = re.sub(r'\)$', '', cleaned).strip()
     return cleaned
 
@@ -411,7 +412,8 @@ def extract_new_game_items(active_version, new_text):
     
     for parent in parents:
         parent_name = parent["name"]
-        clean_parent_core = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', parent_name, flags=re.IGNORECASE).strip()
+        parent_pattern = re.compile(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', re.IGNORECASE)
+        clean_parent_core = parent_pattern.sub('', parent_name).strip()
         
         parts = []
         for sub in subs:
@@ -1364,7 +1366,8 @@ def send_item_icons_to_chat(chat_id, new_items):
             caption += f"\n<i>{subtitle}</i>\n"
             caption += "<blockquote>"
             
-            parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
+            parent_pattern = re.compile(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', re.IGNORECASE)
+            parent_prefix = parent_pattern.sub('', item["name"]).strip()
             
             for part in item["parts"]:
                 clean_part_display = clean_sub_item_name(part["name"], parent_prefix)
@@ -1510,7 +1513,8 @@ def run_miniupdate_extraction_details(version):
                 msg.append(f"🎁 <b>{clean_name}</b> ({category})")
                 msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
                 
-                parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
+                parent_pattern = re.compile(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', re.IGNORECASE)
+                parent_prefix = parent_pattern.sub('', item["name"]).strip()
                 for part in item["parts"][:6]:
                     clean_part_display = clean_sub_item_name(part["name"], parent_prefix).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     msg.append(f"      ▫️ <i>{clean_part_display}</i> (<code>{part['id']}</code>)")
