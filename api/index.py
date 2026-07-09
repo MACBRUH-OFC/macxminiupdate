@@ -154,7 +154,7 @@ def get_multiple_file_info_data(versions):
         return v, None
 
     if versions_to_fetch:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(versions_to_fetch))) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(25, len(versions_to_fetch))) as executor:
             fetched_results = executor.map(fetch, versions_to_fetch)
             for v, val in fetched_results:
                 if val:
@@ -220,39 +220,106 @@ def get_extracted_files(file_id, new_text, active_version, base_url):
         print(f"Failed to extract bundle {file_id}: {e}")
     return []
 
-def find_previous_itemhotfix_content(active_version):
-    parts = active_version.split('.')
-    if len(parts) != 3:
-        return ""
-    major, middle, minor = parts[0], parts[1], int(parts[2])
-    prev_versions = [f"{major}.{middle}.{m_val}" for m_val in range(minor - 1, max(0, minor - 9), -1)]
-    if not prev_versions:
-        return ""
-    fetched_maps = get_multiple_file_info_data(prev_versions)
-    for prev_ver in prev_versions:
+def generate_comparison_candidates(active_version):
+    """Generates sequential historical baseline version strings for smart comparison."""
+    try:
+        parts = list(map(int, active_version.split('.')))
+        if len(parts) != 3:
+            return []
+        major, middle, minor = parts[0], parts[1], parts[2]
+        
+        candidates = []
+        # 1. Previous minor versions in the current middle branch
+        for m in range(minor - 1, -1, -1):
+            candidates.append(f"{major}.{middle}.{m}")
+            
+        # 2. Previous middle branch versions (probing common active ranges)
+        prev_middle = middle - 1
+        prev_major = major
+        if prev_middle < 0:
+            prev_major -= 1
+            prev_middle = 20  # Fallback to general middle range
+            
+        if prev_major >= 0:
+            for m in range(30, -1, -1):
+                candidates.append(f"{prev_major}.{prev_middle}.{m}")
+                
+        return candidates
+    except Exception:
+        return []
+
+def find_comparison_baselines(active_version):
+    """Resolves itemhotfix content for both the closest active version and the previous major series."""
+    candidates = generate_comparison_candidates(active_version)
+    if not candidates:
+        return "", ""
+        
+    fetched_maps = get_multiple_file_info_data(candidates)
+    
+    try:
+        parts = list(map(int, active_version.split('.')))
+        curr_major, curr_middle = parts[0], parts[1]
+    except Exception:
+        return "", ""
+    
+    closest_content = ""
+    prev_series_content = ""
+    
+    for prev_ver in candidates:
         map_val = fetched_maps.get(prev_ver)
         if not map_val:
             continue
         prev_text, _, base_url = map_val
+        
+        try:
+            p_parts = list(map(int, prev_ver.split('.')))
+            is_prev_series = (p_parts[0] < curr_major) or (p_parts[0] == curr_major and p_parts[1] < curr_middle)
+        except Exception:
+            continue
+            
+        if is_prev_series and prev_series_content:
+            continue
+        if not is_prev_series and closest_content:
+            continue
+            
         prev_itemhotfix_id = None
         for line in prev_text.splitlines():
             if not line.strip(): continue
-            p_parts = line.split(',')
-            if len(p_parts) >= 5:
-                fid = p_parts[0].strip()
+            line_parts = line.split(',')
+            if len(line_parts) >= 5:
+                fid = line_parts[0].strip()
                 if "config/itemhotfix" in fid.lower():
                     prev_itemhotfix_id = fid
                     break
+                    
         if prev_itemhotfix_id:
+            content = ""
             prev_files = get_extracted_files(prev_itemhotfix_id, prev_text, prev_ver, base_url)
             for f in prev_files:
                 fname = f.get("name", "") or f.get("fileName", "")
                 if "itemhotfix.txt" in fname.lower():
                     b64_data = f.get("data", "")
                     if b64_data:
-                        return base64.b64decode(b64_data).decode('utf-8', errors='ignore')
+                        content = base64.b64decode(b64_data).decode('utf-8', errors='ignore')
+                        break
+            
+            if content:
+                if is_prev_series:
+                    prev_series_content = content
+                else:
+                    closest_content = content
+                    
+        if closest_content and prev_series_content:
             break
-    return ""
+            
+    if not closest_content and prev_series_content:
+        closest_content = prev_series_content
+        
+    return closest_content, prev_series_content
+
+def find_previous_itemhotfix_content(active_version):
+    closest, _ = find_comparison_baselines(active_version)
+    return closest
 
 def extract_new_game_items(active_version, new_text):
     itemhotfix_id = None
@@ -282,17 +349,48 @@ def extract_new_game_items(active_version, new_text):
                 break
     if not itemhotfix_content:
         return []
-    previous_itemhotfix_content = find_previous_itemhotfix_content(active_version)
-    previous_item_ids = set()
-    if previous_itemhotfix_content:
-        p_lines = previous_itemhotfix_content.splitlines()
-        if len(p_lines) > 2:
-            for pl in p_lines[2:]:
-                if not pl.strip(): continue
-                p_parts = pl.split(',')
-                if len(p_parts) > 0:
-                    pid = p_parts[0].strip()
-                    if pid.isdigit(): previous_item_ids.add(pid)
+        
+    # Gather all item rows from current itemhotfix
+    current_items_all = []
+    lines = itemhotfix_content.splitlines()
+    if len(lines) > 2:
+        for line in lines[2:]:
+            if not line.strip(): continue
+            parts = line.split(',')
+            if len(parts) > 0:
+                item_id = parts[0].strip()
+                if item_id.isdigit():
+                    current_items_all.append(parts)
+
+    closest_content, prev_series_content = find_comparison_baselines(active_version)
+    
+    def parse_item_ids(content_str):
+        ids = set()
+        if not content_str:
+            return ids
+        lines_p = content_str.splitlines()
+        if len(lines_p) > 2:
+            for lp in lines_p[2:]:
+                if not lp.strip(): continue
+                parts_p = lp.split(',')
+                if len(parts_p) > 0:
+                    pid = parts_p[0].strip()
+                    if pid.isdigit():
+                        ids.add(pid)
+        return ids
+
+    closest_item_ids = parse_item_ids(closest_content)
+    prev_series_item_ids = parse_item_ids(prev_series_content)
+
+    # Check differences compared to the closest baseline
+    new_ids_closest = [p[0] for p in current_items_all if p[0] not in closest_item_ids]
+    
+    # If no new items are found inside the closest baseline, fall back to the previous major baseline
+    if not new_ids_closest and prev_series_item_ids:
+        final_previous_ids = prev_series_item_ids
+    else:
+        final_previous_ids = closest_item_ids
+
     lochotfix_content = ""
     if lochotfix_id:
         lochotfix_files = get_extracted_files(lochotfix_id, new_text, active_version, base_url)
@@ -308,27 +406,24 @@ def extract_new_game_items(active_version, new_text):
         matches = re.findall(r'<l\s+[^>]*id="([^"]+)"[^>]*\ben="([^"]+)"', lochotfix_content)
         for name_id, en_val in matches:
             translations[name_id] = en_val
+            
     raw_parsed_items = []
-    lines = itemhotfix_content.splitlines()
-    if len(lines) > 2:
-        for line in lines[2:]:
-            if not line.strip(): continue
-            parts = line.split(',')
-            if len(parts) >= 8:
-                item_id = parts[0].strip()
-                if not item_id or not item_id.isdigit(): continue
-                if item_id in previous_item_ids: continue
-                text_id = parts[7].strip() if parts[7].strip() else ""
-                if not text_id:
-                    for p in parts:
-                        if p.strip().startswith("T_"):
-                            text_id = p.strip()
-                            break
-                raw_parsed_items.append({
-                    "id": item_id,
-                    "text_id": text_id,
-                    "row_parts": parts
-                })
+    for parts in current_items_all:
+        item_id = parts[0]
+        if item_id in final_previous_ids:
+            continue
+        text_id = parts[7].strip() if len(parts) > 7 and parts[7].strip() else ""
+        if not text_id:
+            for p in parts:
+                if p.strip().startswith("T_"):
+                    text_id = p.strip()
+                    break
+        raw_parsed_items.append({
+            "id": item_id,
+            "text_id": text_id,
+            "row_parts": parts
+        })
+        
     for item in raw_parsed_items:
         text_id = item["text_id"]
         resolved_name = translations.get(text_id, text_id)
@@ -1464,6 +1559,18 @@ def delete_message(chat_id, message_id):
     try:
         http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
     except Exception: pass
+
+
+# ==========================================
+# Telegram Bot Database & Webhook System (Restored & Dynamic Request System)
+# ==========================================
+
+def send_access_request_menu(chat_id, user_id):
+    keyboard = [[{"text": "🔑 Request Access Permission", "callback_data": f"req_access_{user_id}"}]]
+    send_message_with_keyboard(chat_id, (
+        "🛑 <b>ACCESS RESTRICTED</b>\n\n"
+        "You do not currently possess active administrative authorization rights to query this backend service."
+    ), {"inline_keyboard": keyboard}, parse_mode="HTML")
 
 
 # ==========================================
