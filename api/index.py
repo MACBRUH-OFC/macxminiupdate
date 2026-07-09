@@ -308,8 +308,7 @@ def clean_sub_item_name(sub_name, parent_prefix=""):
     cleaned = re.sub(r'^\[[^\]]+\]\s*', '', sub_name).strip()
     if parent_prefix:
         esc_prefix = re.escape(parent_prefix)
-        pattern = re.compile(rf'^{esc_prefix}\s*[\(\-\s]*', re.IGNORECASE)
-        cleaned = pattern.sub('', cleaned).strip()
+        cleaned = re.sub(rf'^{esc_prefix}\s*[\(\-\s]*', '', cleaned, flags=re.IGNORECASE).strip()
         cleaned = re.sub(r'\)$', '', cleaned).strip()
     return cleaned
 
@@ -410,10 +409,9 @@ def extract_new_game_items(active_version, new_text):
     grouped_items = []
     used_subs = set()
     
-    for parent in parents:
-        parent_name = parent["name"]
-        parent_pattern = re.compile(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', re.IGNORECASE)
-        clean_parent_core = parent_pattern.sub('', parent_name).strip()
+    for main in parents:
+        main_name = main["name"]
+        clean_main_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', main_name, flags=re.IGNORECASE).strip()
         
         parts = []
         for sub in subs:
@@ -423,11 +421,11 @@ def extract_new_game_items(active_version, new_text):
             bracket_match = re.match(r'^\[([^\]]+)\]', sub_name)
             if bracket_match:
                 bracket_content = bracket_match.group(1).strip().lower()
-                if bracket_content in parent_name.lower() or parent_name.lower().startswith(bracket_content):
+                if bracket_content in main_name.lower() or main_name.lower().startswith(bracket_content):
                     is_match = True
                     
-            if not is_match and len(clean_parent_core) > 2:
-                if clean_parent_core.lower() in sub_name.lower() or sub_name.lower().startswith(clean_parent_core.lower()):
+            if not is_match and len(clean_main_prefix) > 2:
+                if clean_main_prefix.lower() in sub_name.lower() or sub_name.lower().startswith(clean_main_prefix.lower()):
                     is_match = True
                     
             if is_match:
@@ -440,10 +438,10 @@ def extract_new_game_items(active_version, new_text):
                 used_subs.add(sub["id"])
                 
         grouped_items.append({
-            "id": parent["id"],
-            "name": parent["name"],
-            "text_id": parent["text_id"],
-            "icon_url": parent["icon_url"],
+            "id": main["id"],
+            "name": main["name"],
+            "text_id": main["text_id"],
+            "icon_url": main["icon_url"],
             "parts": parts,
             "is_bundle": True if parts else False
         })
@@ -1366,8 +1364,7 @@ def send_item_icons_to_chat(chat_id, new_items):
             caption += f"\n<i>{subtitle}</i>\n"
             caption += "<blockquote>"
             
-            parent_pattern = re.compile(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', re.IGNORECASE)
-            parent_prefix = parent_pattern.sub('', item["name"]).strip()
+            parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
             
             for part in item["parts"]:
                 clean_part_display = clean_sub_item_name(part["name"], parent_prefix)
@@ -1513,8 +1510,7 @@ def run_miniupdate_extraction_details(version):
                 msg.append(f"🎁 <b>{clean_name}</b> ({category})")
                 msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
                 
-                parent_pattern = re.compile(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', re.IGNORECASE)
-                parent_prefix = parent_pattern.sub('', item["name"]).strip()
+                parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
                 for part in item["parts"][:6]:
                     clean_part_display = clean_sub_item_name(part["name"], parent_prefix).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     msg.append(f"      ▫️ <i>{clean_part_display}</i> (<code>{part['id']}</code>)")
@@ -2238,3 +2234,145 @@ def handle_bot_webhook():
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
+
+# ==========================================
+# Telegram Bot Database helper definitions
+# ==========================================
+
+def read_db_from_chat(chat_id):
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            text = res["result"]["pinned_message"].get("text", "")
+            if "📦 DATABASE STORAGE" in text:
+                lines = text.split("\n")
+                for line in lines:
+                    line_strip = line.strip()
+                    if line_strip.startswith("{") and line_strip.endswith("}"):
+                        return json.loads(line_strip)
+    except Exception as e:
+        print(f"DB read warning for {chat_id}: {e}")
+    return None
+
+def write_db_to_chat(chat_id, db_dict):
+    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
+    try:
+        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
+        if res.get("ok") and "pinned_message" in res["result"]:
+            msg = res["result"]["pinned_message"]
+            if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
+                    "chat_id": chat_id,
+                    "message_id": msg["message_id"],
+                    "text": db_text
+                }, timeout=10)
+                return
+        new_msg = send_message(chat_id, db_text)
+        if new_msg and new_msg.get("ok"):
+            msg_id = new_msg["result"]["message_id"]
+            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "disable_notification": True
+            }, timeout=10)
+    except Exception as e:
+         print(f"DB write warning: {e}")
+
+def get_db():
+    owner_db = read_db_from_chat(OWNER_ID)
+    if not owner_db:
+        owner_db = read_db_from_chat(GROUP_ID)
+        if owner_db:
+            write_db_to_chat(OWNER_ID, owner_db)
+            try:
+                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
+                if res.get("ok") and "pinned_message" in res["result"]:
+                    msg = res["result"]["pinned_message"]
+                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
+                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
+            except Exception: pass
+            
+    if not owner_db:
+        return {
+            "allowed_users": [OWNER_ID], 
+            "pending_requests": [],
+            "rejection_sticker": None,
+            "owner_state": None
+        }
+        
+    needs_write = False
+    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
+    for k in legacy_keys:
+        if k in owner_db:
+            owner_db.pop(k, None)
+            needs_write = True
+            
+    if "allowed_users" not in owner_db: 
+        owner_db["allowed_users"] = [OWNER_ID]
+        needs_write = True
+    if "pending_requests" not in owner_db: 
+        owner_db["pending_requests"] = []
+        needs_write = True
+        
+    if needs_write:
+        save_db(owner_db)
+        
+    return owner_db
+
+def save_db(db):
+    write_db_to_chat(OWNER_ID, db)
+
+def is_user_allowed(user_id):
+    if user_id == OWNER_ID: return True
+    db = get_db()
+    for u in db.get("allowed_users", []):
+        if isinstance(u, int) and u == user_id: return True
+        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
+    return False
+
+def is_action_permitted(chat_id, user_id):
+    if user_id == OWNER_ID: return True
+    if str(chat_id) == GROUP_ID: return True
+    if is_user_allowed(user_id): return True
+    return False
+
+def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
+    db = get_db()
+    allowed = db.get("allowed_users", [])
+    exists = False
+    for i, u in enumerate(allowed):
+        if isinstance(u, int) and u == user_id:
+            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
+            exists = True
+            break
+        elif isinstance(u, dict) and u.get("user_id") == user_id:
+            u["first_name"] = first_name
+            u["username"] = username
+            u["chat_title"] = chat_title
+            exists = True
+            break
+    if not exists:
+        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
+    db["allowed_users"] = allowed
+    save_db(db)
+
+def add_pending_request(user_id, first_name, username, chat_title):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    if not any(p["user_id"] == user_id for p in pending):
+        pending.append({
+            "user_id": user_id,
+            "first_name": first_name,
+            "username": username,
+            "chat_title": chat_title
+        })
+        db["pending_requests"] = pending
+        write_db_to_chat(OWNER_ID, db)
+
+def remove_pending_request(user_id):
+    db = get_db()
+    pending = db.get("pending_requests", [])
+    pending = [p for p in pending if p["user_id"] != user_id]
+    db["pending_requests"] = pending
+    write_db_to_chat(OWNER_ID, db)
