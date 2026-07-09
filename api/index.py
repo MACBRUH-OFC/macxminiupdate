@@ -268,6 +268,47 @@ def find_previous_itemhotfix_content(active_version):
             break
     return ""
 
+def get_item_type_label(item_id, item_name=""):
+    """Determines item categorization label based on the standard prefix definitions of Garena item IDs."""
+    item_id_str = str(item_id).strip()
+    prefix = item_id_str[:3]
+    
+    if prefix == "710":
+        if "voice" in item_name.lower() or "pack" in item_name.lower():
+            return "Voice Pack"
+        return "Costume Bundle"
+        
+    mapping = {
+        "201": "Head/Hair",
+        "202": "Mask/Face",
+        "203": "Top",
+        "204": "Bottom",
+        "205": "Shoes",
+        "206": "Accessory",
+        "903": "Loot Box",
+        "904": "Backpack",
+        "905": "Parachute",
+        "906": "Skyboard",
+        "907": "Weapon Skin",
+        "908": "Vehicle Skin",
+        "909": "Emote",
+        "910": "Pin",
+        "911": "Skywing",
+        "912": "Animation",
+        "913": "Music CD",
+        "921": "Voice Track"
+    }
+    return mapping.get(prefix, "General Item")
+
+def clean_sub_item_name(sub_name, parent_prefix=""):
+    """Safely strips redundant bracket prefixes and container names for tidy nested formatting."""
+    cleaned = re.sub(r'^\[[^\]]+\]\s*', '', sub_name).strip()
+    if parent_prefix:
+        esc_prefix = re.escape(parent_prefix)
+        cleaned = re.sub(rf'^{esc_prefix}\s*[\(\-\s]*', '', cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r'\)$', '', cleaned).strip()
+    return cleaned
+
 def extract_new_game_items(active_version, new_text):
     itemhotfix_id = None
     lochotfix_id = None
@@ -353,62 +394,62 @@ def extract_new_game_items(active_version, new_text):
         item["name"] = resolved_name
         item["icon_url"] = f"https://dl.cdn.freefiremobile.com/live/ABHotUpdates/IconCDN/other/{item['id']}.png"
         
-    mains = []
-    subs = []
+    parents = []
+    singletons = []
     for item in raw_parsed_items:
         name_lower = item["name"].lower()
-        if any(k in name_lower for k in ["bundle", "pack", "box", "chest", "crate"]):
-            mains.append(item)
+        if any(k in name_lower for k in ["bundle", "pack", "box", "chest", "crate"]) or str(item["id"]).startswith("710"):
+            parents.append(item)
         else:
-            subs.append(item)
+            singletons.append(item)
             
     grouped_items = []
-    used_subs = set()
+    used_singletons = set()
     
-    for main in mains:
-        main_name = main["name"]
-        clean_main_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', main_name, flags=re.IGNORECASE).strip()
+    for parent in parents:
+        parent_name = parent["name"]
+        clean_parent_core = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', parent_name, flags=re.IGNORECASE).strip()
         
         parts = []
-        for sub in subs:
-            sub_name = sub["name"]
+        for sing in singletons:
+            sing_name = sing["name"]
             is_match = False
             
-            bracket_match = re.match(r'^\[([^\]]+)\]', sub_name)
+            bracket_match = re.match(r'^\[([^\]]+)\]', sing_name)
             if bracket_match:
                 bracket_content = bracket_match.group(1).strip().lower()
-                if bracket_content in main_name.lower() or main_name.lower().startswith(bracket_content):
+                if bracket_content in parent_name.lower() or parent_name.lower().startswith(bracket_content):
                     is_match = True
                     
-            if not is_match and len(clean_main_prefix) > 2:
-                if clean_main_prefix.lower() in sub_name.lower() or sub_name.lower().startswith(clean_main_prefix.lower()):
+            if not is_match and len(clean_parent_core) > 2:
+                if clean_parent_core.lower() in sing_name.lower() or sing_name.lower().startswith(clean_parent_core.lower()):
                     is_match = True
                     
             if is_match:
                 parts.append({
-                    "id": sub["id"],
-                    "name": sub["name"],
-                    "text_id": sub["text_id"],
-                    "icon_url": sub["icon_url"]
+                    "id": sing["id"],
+                    "name": sing["name"],
+                    "text_id": sing["text_id"],
+                    "icon_url": sing["icon_url"]
                 })
-                used_subs.add(sub["id"])
+                used_singletons.add(sing["id"])
                 
         grouped_items.append({
-            "id": main["id"],
-            "name": main["name"],
-            "text_id": main["text_id"],
-            "icon_url": main["icon_url"],
+            "id": parent["id"],
+            "name": parent["name"],
+            "text_id": parent["text_id"],
+            "icon_url": parent["icon_url"],
             "parts": parts,
             "is_bundle": True if parts else False
         })
         
-    for sub in subs:
-        if sub["id"] not in used_subs:
+    for sing in singletons:
+        if sing["id"] not in used_singletons:
             grouped_items.append({
-                "id": sub["id"],
-                "name": sub["name"],
-                "text_id": sub["text_id"],
-                "icon_url": sub["icon_url"],
+                "id": sing["id"],
+                "name": sing["name"],
+                "text_id": sing["text_id"],
+                "icon_url": sing["icon_url"],
                 "parts": [],
                 "is_bundle": False
             })
@@ -1270,7 +1311,7 @@ def remove_pending_request(user_id):
     write_db_to_chat(OWNER_ID, db)
 
 def send_item_icons_to_chat(chat_id, new_items):
-    """Delivers newly parsed item icons elegantly as grouped grid-like media albums to avoid chat clutter."""
+    """Delivers newly parsed item icons elegantly as individual dynamic visual cards in Telegram."""
     if not new_items:
         return
         
@@ -1305,47 +1346,42 @@ def send_item_icons_to_chat(chat_id, new_items):
     if not valid_items:
         return
 
-    # Deliver images in beautiful, cohesive media grids of up to 10 photos
-    batch_size = 10
-    for i in range(0, len(valid_items), batch_size):
-        batch = valid_items[i : i + batch_size]
-        media_group = []
+    # Deliver standalone detailed visual card messages
+    for item in valid_items:
+        category = get_item_type_label(item["id"], item["name"])
         
-        for item in batch:
-            if item["is_bundle"] and item["parts"]:
-                caption = (
-                    f"🎁 <b>{item['name']}</b>\n"
-                    f"🆔 ID: <code>{item['id']}</code>\n\n"
-                    f"📦 <b>Pack Components:</b>\n"
-                )
-                for part in item["parts"]:
-                    caption += f"▫️ <i>{part['name']}</i> - <code>{part['id']}</code>\n"
-            else:
-                caption = (
-                    f"✨ <b>{item['name']}</b>\n"
-                    f"🆔 ID: <code>{item['id']}</code>"
-                )
-                
-            # Truncate to Telegram's limits safely
-            if len(caption) > 1000:
-                caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
-                
-            media_group.append({
-                "type": "photo",
-                "media": item["icon_url"],
-                "caption": caption,
-                "parse_mode": "HTML"
-            })
+        caption = (
+            f"•<u>New {category}:</u>\n\n"
+            f"<a href=\"{item['icon_url']}\"><b>{item['name']}</b></a>\n"
+            f"ID: <code>{item['id']}</code>\n"
+        )
+        
+        if item["is_bundle"] and item["parts"]:
+            subtitle = "Voices:" if "voice" in category.lower() else "Bundle Components:"
+            caption += f"\n<i>{subtitle}</i>\n"
+            caption += "<blockquote>"
+            
+            parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
+            
+            for part in item["parts"]:
+                clean_part_display = clean_sub_item_name(part["name"], parent_prefix)
+                caption += f"▫️ <i>{clean_part_display}</i>\nID: <code>{part['id']}</code>\n"
+            caption += "</blockquote>"
+            
+        if len(caption) > 1000:
+            caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
             
         try:
-            url = f"{TELEGRAM_API}/sendMediaGroup"
+            url = f"{TELEGRAM_API}/sendPhoto"
             payload = {
                 "chat_id": chat_id,
-                "media": json.dumps(media_group)
+                "photo": item["icon_url"],
+                "caption": caption,
+                "parse_mode": "HTML"
             }
-            http_session.post(url, json=payload, timeout=25)
+            http_session.post(url, json=payload, timeout=20)
         except Exception as e:
-            print(f"Error delivering grouped album batch: {e}")
+            print(f"Error delivering individual Telegram post: {e}")
 
 def run_miniupdate_extraction_details(version):
     """Processes version changes and formats details for Telegram transmission using HTML parse mode."""
@@ -1465,17 +1501,20 @@ def run_miniupdate_extraction_details(version):
         msg.append("├ ✨ <b><u>NEW GAME ITEMS:</u></b>")
         msg.append("<blockquote>")
         for idx, item in enumerate(new_items[:12], 1):
+            category = get_item_type_label(item["id"], item["name"])
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             if item.get("parts"):
-                msg.append(f"🎁 <b>{clean_name}</b>")
+                msg.append(f"🎁 <b>{clean_name}</b> ({category})")
                 msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
+                
+                parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
                 for part in item["parts"][:6]:
-                    clean_part_name = part['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                    msg.append(f"      ▫️ <i>{clean_part_name}</i> (<code>{part['id']}</code>)")
+                    clean_part_display = clean_sub_item_name(part["name"], parent_prefix).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    msg.append(f"      ▫️ <i>{clean_part_display}</i> (<code>{part['id']}</code>)")
                 if len(item["parts"]) > 6:
                     msg.append(f"      ▫️ ... and {len(item['parts']) - 6} more parts.")
             else:
-                msg.append(f"▫️ <b>{clean_name}</b>")
+                msg.append(f"▫️ <b>{clean_name}</b> ({category})")
                 msg.append(f"      ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
         if len(new_items) > 12:
             msg.append(f"... and {len(new_items) - 12} more items.")
