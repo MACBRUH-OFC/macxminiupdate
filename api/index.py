@@ -275,15 +275,39 @@ def get_item_type_label(item_id, item_name=""):
     """Deduces cosmetic/functional layout categories strictly based on Garena ID and naming signatures."""
     item_id_str = str(item_id).strip()
     prefix = item_id_str[:3]
+    name_lower = item_name.lower()
     
+    # 1. Prioritize structural keywords in names to bypass generic ID mappings
+    if "head" in name_lower or "hair" in name_lower:
+        return "Head"
+    if "mask" in name_lower or "facepaint" in name_lower or "face" in name_lower or "eye" in name_lower:
+        return "Mask"
+    if "gloo wall" in name_lower:
+        return "Gloo Wall"
+    if "fist" in name_lower:
+        return "Fist Skin"
+    if "grenade" in name_lower:
+        return "Grenade Skin"
+    if "parachute" in name_lower:
+        return "Parachute"
+    if "backpack" in name_lower or "bag" in name_lower:
+        return "Backpack"
+    if "skyboard" in name_lower or "board" in name_lower:
+        return "Skyboard"
+    if "skywing" in name_lower:
+        return "Skywing"
+    if "emote" in name_lower:
+        return "Emote"
+        
+    # 2. Reroute via ID prefix classifications
     if prefix == "710":
-        if "voice" in item_name.lower() or "pack" in item_name.lower():
+        if "voice" in name_lower or "pack" in name_lower:
             return "Voice Pack"
         return "Costume Bundle"
         
     mapping = {
-        "201": "Head/Hair",
-        "202": "Mask/Face",
+        "201": "Head",
+        "202": "Mask",
         "203": "Top",
         "204": "Bottom",
         "205": "Shoes",
@@ -295,9 +319,9 @@ def get_item_type_label(item_id, item_name=""):
         "907": "Weapon Skin",
         "908": "Vehicle Skin",
         "909": "Emote",
-        "910": "Pin",
+        "910": "Profile Pin",
         "911": "Skywing",
-        "912": "Animation",
+        "912": "Arrival Animation",
         "913": "Music CD",
         "921": "Voice Track"
     }
@@ -401,7 +425,13 @@ def extract_new_game_items(active_version, new_text):
     subs = []
     for item in raw_parsed_items:
         name_lower = item["name"].lower()
-        if any(k in name_lower for k in ["bundle", "pack", "box", "chest", "crate"]) or str(item["id"]).startswith("710"):
+        item_id_str = str(item["id"])
+        
+        # Prevent individual Voice Tracks (prefix 921) containing keywords like "chest" from becoming parents
+        is_parent_prefix = item_id_str.startswith("710") or item_id_str.startswith("903")
+        is_parent_keyword = any(k in name_lower for k in ["bundle", "pack", "box", "chest", "crate"]) and not item_id_str.startswith("921")
+        
+        if is_parent_prefix or is_parent_keyword:
             parents.append(item)
         else:
             subs.append(item)
@@ -1354,8 +1384,8 @@ def send_item_icons_to_chat(chat_id, new_items):
         category = get_item_type_label(item["id"], item["name"])
         
         caption = (
-            f"•<u>New {category}:</u>\n\n"
-            f"<a href=\"{item['icon_url']}\"><b>{item['name']}</b></a>\n"
+            f"• <u>New {category}:</u>\n\n"
+            f"<b>{item['name']}</b>\n"
             f"ID: <code>{item['id']}</code>\n"
         )
         
@@ -1375,10 +1405,11 @@ def send_item_icons_to_chat(chat_id, new_items):
             caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
             
         try:
-            url = f"{TELEGRAM_API}/sendPhoto"
+            # Send as document (PNG file format) to support original transparent backdrops in Telegram beautifully
+            url = f"{TELEGRAM_API}/sendDocument"
             payload = {
                 "chat_id": chat_id,
-                "photo": item["icon_url"],
+                "document": item["icon_url"],
                 "caption": caption,
                 "parse_mode": "HTML"
             }
