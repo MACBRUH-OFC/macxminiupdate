@@ -638,7 +638,7 @@ function renderItemList() {
             const partRows = item.parts.map((part, partIdx) => {
                 const displayPartName = cleanSubItemName(part.name, parentPrefix);
                 return `
-                <div class="flex items-center justify-between p-1.5 rounded-lg border border-zinc-950 min-w-0 select-none cursor-pointer hover:border-yellow-500/25 transition-all" onclick="copyItemInfo('${part.id}', '${part.name.replace(/'/g, "\\'")}')">
+                <div class="flex items-center justify-between p-1.5 rounded-lg border border-zinc-950 min-w-0 select-none cursor-pointer hover:border-yellow-500/25 transition-all" onclick="selectVoiceTrackInViewport('${item.id}', '${part.id}', ${partIdx})">
                     <div class="flex items-center gap-2 min-w-0 flex-1">
                         <img src="${part.icon_url}" class="w-7 h-7 object-contain rounded bg-black border border-zinc-900 flex-shrink-0" onerror="this.src='https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png'">
                         <div class="min-w-0 flex-1 text-left">
@@ -647,9 +647,6 @@ function renderItemList() {
                         </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0" onclick="event.stopPropagation();">
-                        <button onclick="playVoiceTrackAudio('${item.id}', '${part.id}', ${partIdx}, this)" class="w-5 h-5 bg-yellow-500/15 hover:bg-yellow-500 text-yellow-500 hover:text-black rounded flex items-center justify-center transition-all" title="Listen Voice Line">
-                            <i class="fa-solid fa-play text-[8px]"></i>
-                        </button>
                         <button onclick="copySingleField('${displayPartName.replace(/'/g, "\\'")}')" class="w-5 h-5 bg-zinc-900 hover:text-white rounded flex items-center justify-center text-zinc-500" title="Copy Component Text">
                             <i class="fa-regular fa-comment text-[8px]"></i>
                         </button>
@@ -1682,13 +1679,81 @@ function initAudioContextEngine(audioElement, canvas, ctx) {
     drawFullSymmetricWaves();
 }
 
-function copySingleField(val) {
-    navigator.clipboard.writeText(val).then(() => {
-        showToast(`Copied: ${val}`);
-    }).catch(() => {
-        showToast("Copy failed", false);
-    });
-}
+window.playAudioInline = function(url, buttonEl) {
+    if (currentInlineAudio && currentInlineAudio.src === url) {
+        if (!currentInlineAudio.paused) {
+            currentInlineAudio.pause();
+            buttonEl.innerHTML = '<i class="fa-solid fa-play text-[8px]"></i>';
+            return;
+        } else {
+            currentInlineAudio.play();
+            buttonEl.innerHTML = '<i class="fa-solid fa-pause text-[8px]"></i>';
+            return;
+        }
+    }
+    
+    if (currentInlineAudio) {
+        currentInlineAudio.pause();
+        if (currentInlineButton) {
+            currentInlineButton.innerHTML = '<i class="fa-solid fa-play text-[8px]"></i>';
+        }
+    }
+    
+    currentInlineAudio = new Audio(url);
+    currentInlineButton = buttonEl;
+    buttonEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-[8px]"></i>';
+    
+    currentInlineAudio.oncanplay = () => {
+        currentInlineAudio.play();
+        buttonEl.innerHTML = '<i class="fa-solid fa-pause text-[8px]"></i>';
+    };
+    
+    currentInlineAudio.onended = () => {
+        buttonEl.innerHTML = '<i class="fa-solid fa-play text-[8px]"></i>';
+        currentInlineAudio = null;
+        currentInlineButton = null;
+    };
+    
+    currentInlineAudio.onerror = () => {
+        showToast("Audio play failed", false);
+        buttonEl.innerHTML = '<i class="fa-solid fa-play text-[8px]"></i>';
+    };
+};
+
+window.selectVoiceTrackInViewport = function(parentPackId, trackId, trackIndex) {
+    let audioFiles = [];
+    
+    for (let index in trayDataCache) {
+        let extracted = trayDataCache[index];
+        if (extracted.assets) {
+            extracted.assets.forEach(asset => {
+                let name = (asset.name || asset.fileName || "").toLowerCase();
+                if (name.endsWith('.ogg') || name.endsWith('.mp3') || name.endsWith('.wav') || (asset.type || "").toLowerCase().includes('audio')) {
+                    audioFiles.push(asset);
+                }
+            });
+        }
+    }
+    
+    if (audioFiles.length === 0) {
+        showToast("No extracted audio tracks found in cache. Expand the bundle above first!", false);
+        return;
+    }
+    
+    let matchedAudio = audioFiles[trackIndex % audioFiles.length];
+    if (matchedAudio) {
+        let displayName = matchedAudio.name || matchedAudio.fileName || "voice_track.ogg";
+        selectFile({
+            id: matchedAudio.preview_url || matchedAudio.url,
+            name: displayName,
+            label: "audio/ogg",
+            associatedTextures: [],
+            compositeParts: []
+        }, null);
+    } else {
+        showToast("Failed to map voice line index to extracted assets", false);
+    }
+};
 
 function formatTimeMetrics(secs) {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');

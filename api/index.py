@@ -288,41 +288,33 @@ def get_item_type_label(item_id, item_name=""):
         return "Fist Skin"
     if "grenade" in name_lower:
         return "Grenade Skin"
-    if "parachute" in name_lower:
-        return "Parachute"
-    if "backpack" in name_lower or "bag" in name_lower:
-        return "Backpack"
-    if "skyboard" in name_lower or "board" in name_lower:
-        return "Skyboard"
-    if "skywing" in name_lower:
-        return "Skywing"
-    if "emote" in name_lower:
-        return "Emote"
         
-    # 2. Reroute via ID prefix classifications
+    # 2. Reroute via ID prefix classifications matching Garena range patterns
     if prefix == "710":
         if "voice" in name_lower or "pack" in name_lower:
             return "Voice Pack"
-        return "Costume Bundle"
+        return "Bundle"
         
     mapping = {
+        "902": "Avatar",
+        "901": "Banner",
         "201": "Head",
         "202": "Mask",
         "203": "Top",
         "204": "Bottom",
         "205": "Shoes",
         "206": "Accessory",
-        "903": "Loot Box",
+        "903": "Loot box",
         "904": "Backpack",
         "905": "Parachute",
         "906": "Skyboard",
-        "907": "Weapon Skin",
-        "908": "Vehicle Skin",
+        "907": "Weapon",
+        "908": "Vehicle",
         "909": "Emote",
-        "910": "Profile Pin",
+        "910": "Pin",
         "911": "Skywing",
-        "912": "Arrival Animation",
-        "913": "Music CD",
+        "912": "Animation",
+        "913": "Music cd",
         "921": "Voice Track"
     }
     return mapping.get(prefix, "General Item")
@@ -589,66 +581,44 @@ def extract_version_from_input(input_str):
 
 def analyze_update_purpose(files, new_items):
     categories = set()
-    highlights = []
     
     obj_count = sum(1 for f in files if f["fileName"].lower().endswith(".obj"))
     png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]))
-    config_count = sum(1 for f in files if "config/" in f["fileName"].lower())
-    loc_count = sum(1 for f in files if "localization/" in f["fileName"].lower())
     sound_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".ogg", ".wav", ".mp3"]))
     
-    voice_pack_names = [i["name"] for i in new_items if "voice pack" in i["name"].lower() or get_item_type_label(i["id"], i["name"]) == "Voice Pack"]
-    costume_names = [i["name"] for i in new_items if any(k in i["name"].lower() for k in ["bundle", "suit", "costume"]) or get_item_type_label(i["id"], i["name"]) == "Costume Bundle"]
-    emote_names = [i["name"] for i in new_items if "emote" in i["name"].lower() or get_item_type_label(i["id"], i["name"]) == "Emote"]
-    vehicle_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Vehicle Skin"]
+    voice_pack_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Voice Pack"]
+    costume_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Bundle"]
+    emote_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Emote"]
+    vehicle_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Vehicle"]
     
     summary_parts = []
-    
     if voice_pack_names:
         categories.add("Voice Packs")
-        summary_parts.append(f"Injected new Voice Packs ({', '.join(voice_pack_names[:2])})")
+        summary_parts.append(f"Voice Packs ({voice_pack_names[0]})")
     if costume_names:
-        categories.add("Exclusive Costumes")
-        summary_parts.append(f"Added premium costume bundles ({', '.join(costume_names[:2])})")
+        categories.add("Costumes")
+        summary_parts.append(f"Bundles ({costume_names[0]})")
     if emote_names:
-        categories.add("Expressive Emotes")
-        summary_parts.append(f"Released animation emotes ({', '.join(emote_names[:2])})")
+        categories.add("Emotes")
+        summary_parts.append(f"Emotes ({emote_names[0]})")
     if vehicle_names:
         categories.add("Vehicle Skins")
-        summary_parts.append(f"Added premium vehicle themes ({', '.join(vehicle_names[:2])})")
-        
-    if obj_count > 0:
-        categories.add("3D Visual Models")
-        highlights.append(f"Integrated {obj_count} high-fidelity 3D meshes")
-    if png_count > 0:
-        categories.add("Textures")
-        highlights.append(f"Updated {png_count} render/sprite files")
-    if sound_count > 0:
-        categories.add("Audio Effects")
-        highlights.append(f"Injected {sound_count} acoustic/voice voice lines")
-    if config_count > 0:
-        categories.add("Gameplay Config")
-        highlights.append("Adjusted game mechanics/parameter curves")
+        summary_parts.append(f"Vehicles ({vehicle_names[0]})")
         
     if summary_parts:
-        summary = "This update introduces new visual and audio content: " + ", ".join(summary_parts) + "."
-        if highlights:
-            summary += " This is supported by the addition of " + " and ".join(highlights[:2]) + "."
+        summary = "Integrates new visual and audio content: " + ", ".join(summary_parts[:2]) + "."
     else:
-        if obj_count > 0 or png_count > 0:
-            summary = f"This is a visual theme update deploying {obj_count} meshes and {png_count} texture frames."
+        if obj_count > 0:
+            summary = f"This update deploys {obj_count} visual game models and related meshes."
         elif sound_count > 0:
-            summary = f"This is an audio sync update adding {sound_count} sound files/voice tracks."
-        elif config_count > 0:
-            summary = "This is a technical system calibration patch adjusting gameplay configurations."
+            summary = f"This update injects {sound_count} game sound clips and audio resources."
         else:
-            summary = "This is a standard server synchronization maintenance patch coordinating game asset metadata rules."
+            summary = "Standard synchronization maintenance update coordinating game asset rules."
 
     return {
         "summary": summary,
-        "categories": list(categories) if categories else ["Maintenance Patch"],
-        "highlights": highlights,
-        "severity": "Feature Drop" if summary_parts else "Maintenance Update"
+        "categories": list(categories) if categories else ["Maintenance Update"],
+        "severity": "Content Update" if summary_parts else "Maintenance Update"
     }
 
 def format_bytes_python(bytes_val):
@@ -1409,21 +1379,31 @@ def send_item_icons_to_chat(chat_id, new_items):
         category = get_item_type_label(item["id"], item["name"])
         
         caption = (
-            f"• <b><u>New {category}:</u></b>\n\n"
+            f"• <u>New {category}:</u>\n\n"
             f"<b>{item['name']}</b>\n"
             f"ID: <code>{item['id']}</code>\n"
         )
         
         if item["parts"]:
-            # Check if this parent acts as a nested voice structure
             is_voice = "voice" in category.lower()
+            num_parts = len(item["parts"])
+            
+            # Singular/Plural check based on voice pack tracks count
+            if is_voice:
+                if num_parts == 1: caption += "\n<b><u>Voice:</u></b>\n"
+                else: caption += "\n<b><u>Voices:</u></b>\n"
+            else:
+                if num_parts == 1: caption += "\n<b><u>Part:</u></b>\n"
+                else: caption += "\n<b><u>Parts:</u></b>\n"
+                
             for part in item["parts"]:
-                sub_label = "Voice" if is_voice else "Part"
                 parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
                 clean_part_display = clean_sub_item_name(part["name"], parent_prefix)
-                caption += f"\n<b><u>{sub_label}:</u></b>\n"
-                caption += f"<i>{clean_part_display}</i>\n"
-                caption += f"ID: <code>{part['id']}</code>\n"
+                
+                if num_parts == 1:
+                    caption += f"<i>{clean_part_display}</i>\nID: <code>{part['id']}</code>\n"
+                else:
+                    caption += f"▫️ <i>{clean_part_display}</i>\nID: <code>{part['id']}</code>\n"
                 
         if len(caption) > 1000:
             caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
@@ -1565,10 +1545,21 @@ def run_miniupdate_extraction_details(version):
                 msg.append(f"🎁 <b>{clean_name}</b> ({category})")
                 msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
                 
+                is_voice = "voice" in category.lower()
+                num_parts = len(item["parts"])
+                label = "Voice" if is_voice else "Part"
+                if num_parts > 1:
+                    label += "s"
+                    
+                msg.append(f"      <b><u>{label}:</u></b>")
+                
                 parent_prefix = re.sub(r'\s+(voice\s+pack|bundle|pack|box|chest|crate)\b', '', item["name"], flags=re.IGNORECASE).strip()
                 for part in item["parts"][:6]:
                     clean_part_display = clean_sub_item_name(part["name"], parent_prefix).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                    msg.append(f"      ▫️ <i>{clean_part_display}</i> (<code>{part['id']}</code>)")
+                    if num_parts == 1:
+                        msg.append(f"      <i>{clean_part_display}</i> (<code>{part['id']}</code>)")
+                    else:
+                        msg.append(f"      ▫️ <i>{clean_part_display}</i> (<code>{part['id']}</code>)")
                 if len(item["parts"]) > 6:
                     msg.append(f"      ▫️ ... and {len(item['parts']) - 6} more parts.")
             else:
