@@ -517,6 +517,23 @@ def extract_new_game_items(active_version, new_text):
             
     return grouped_items
 
+def verify_icons_availability(items):
+    """Checks the live availability of cosmetic icon CDN URLs concurrently."""
+    def check_one(item):
+        url = item.get("icon_url", "")
+        if not url:
+            item["icon_available"] = False
+            return item
+        try:
+            res = http_session.head(url, timeout=2.0)
+            item["icon_available"] = (res.status_code == 200)
+        except Exception:
+            item["icon_available"] = False
+        return item
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(15, len(items) if items else 1)) as executor:
+        return list(executor.map(check_one, items))
+
 def check_name_similarity(name1, name2):
     """Normalized token alignment index mapping mesh names with texture assets safely."""
     n1 = re.sub(r'[\W_]+', ' ', name1).lower().strip()
@@ -722,6 +739,8 @@ def check_update_logic():
     new_items = []
     try:
         new_items = extract_new_game_items(active_version, new_text)
+        if new_items:
+            new_items = verify_icons_availability(new_items)
     except Exception as e:
         print(f"Error parsing game items hotfix: {e}")
         
@@ -1343,48 +1362,26 @@ def send_item_icons_to_chat(chat_id, new_items):
     if not new_items:
         return
         
-    fallback_logo = "https://dl.dir.freefiremobile.com/common/web_event/official2/dist/client/img/full_logo.969f536.png"
-    
-    def verify_and_prepare(item):
-        item_id = item.get("id")
-        item_name = item.get("name", "Unknown Item")
-        icon_url = item.get("icon_url")
-        if not item_id or not icon_url:
-            return None
-            
-        try:
-            res = http_session.head(icon_url, timeout=2.5)
-            if res.status_code != 200:
-                icon_url = fallback_logo
-        except Exception:
-            icon_url = fallback_logo
-            
-        return {
-            "id": item_id,
-            "name": item_name,
-            "icon_url": icon_url,
-            "parts": item.get("parts", []),
-            "is_bundle": item.get("is_bundle", False)
-        }
+    # Query live CDN availability
+    verified_items = verify_icons_availability(new_items)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(new_items))) as executor:
-        verified_results = list(executor.map(verify_and_prepare, new_items))
-        
-    valid_items = [v for v in verified_results if v is not None]
-    if not valid_items:
-        return
-
-    # Deliver standalone detailed visual card messages
-    for item in valid_items:
+    # Deliver detailed card messages
+    for item in verified_items:
         category = get_item_type_label(item["id"], item["name"])
+        icon_available = item.get("icon_available", True)
+        
+        icon_status_text = ""
+        if not icon_available:
+            icon_status_text = "\n⚠️ <i>(icon not available)</i>"
         
         caption = (
             f"• <u>New {category}:</u>\n\n"
             f"<b>{item['name']}</b>\n"
             f"ID: <code>{item['id']}</code>\n"
+            f"{icon_status_text}\n"
         )
         
-        if item["parts"]:
+        if item.get("parts"):
             is_voice = "voice" in category.lower()
             num_parts = len(item["parts"])
             
@@ -1409,15 +1406,33 @@ def send_item_icons_to_chat(chat_id, new_items):
             caption = caption[:960] + "\n\n▫ ... <i>Truncated due to limits...</i>"
             
         try:
-            # Send as document (PNG file format) to support original transparent backdrops in Telegram beautifully
-            url = f"{TELEGRAM_API}/sendDocument"
-            payload = {
-                "chat_id": chat_id,
-                "document": item["icon_url"],
-                "caption": caption,
-                "parse_mode": "HTML"
-            }
-            http_session.post(url, json=payload, timeout=20)
+            if icon_available:
+                # Send as document (PNG file format) to support original transparent backdrops in Telegram
+                url = f"{TELEGRAM_API}/sendDocument"
+                payload = {
+                    "chat_id": chat_id,
+                    "document": item["icon_url"],
+                    "caption": caption,
+                    "parse_mode": "HTML"
+                }
+                http_session.post(url, json=payload, timeout=20)
+            else:
+                # Fallback: Send raw textual card and issue link checker insertion notice
+                url = f"{TELEGRAM_API}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": caption,
+                    "parse_mode": "HTML"
+                }
+                http_session.post(url, json=payload, timeout=20)
+                
+                # Single missing item icon triggers individual message
+                missing_icon_url = item["icon_url"]
+                http_session.post(f"{TELEGRAM_API}/sendMessage", json={
+                    "chat_id": chat_id,
+                    "text": f"/add {missing_icon_url}"
+                }, timeout=10)
+
         except Exception as e:
             print(f"Error delivering individual Telegram post: {e}")
 
@@ -1482,6 +1497,8 @@ def run_miniupdate_extraction_details(version):
     new_items = []
     try:
         new_items = extract_new_game_items(version, new_text)
+        if new_items:
+            new_items = verify_icons_availability(new_items)
     except Exception: pass
     
     analysis = analyze_update_purpose(simple_file_list, new_items)
@@ -1541,8 +1558,12 @@ def run_miniupdate_extraction_details(version):
         for idx, item in enumerate(new_items[:12], 1):
             category = get_item_type_label(item["id"], item["name"])
             clean_name = item['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            
+            # Check for availability tag
+            avail_tag = "" if item.get("icon_available", True) else " ⚠️ <i>(icon not available)</i>"
+            
             if item.get("parts"):
-                msg.append(f"🎁 <b>{clean_name}</b> ({category})")
+                msg.append(f"🎁 <b>{clean_name}</b> ({category}){avail_tag}")
                 msg.append(f"      Parent ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
                 
                 is_voice = "voice" in category.lower()
@@ -1563,7 +1584,7 @@ def run_miniupdate_extraction_details(version):
                 if len(item["parts"]) > 6:
                     msg.append(f"      ▫️ ... and {len(item['parts']) - 6} more parts.")
             else:
-                msg.append(f"▫️ <b>{clean_name}</b> ({category})")
+                msg.append(f"▫️ <b>{clean_name}</b> ({category}){avail_tag}")
                 msg.append(f"      ID: <a href=\"{item['icon_url']}\"><code>{item['id']}</code></a>")
         if len(new_items) > 12:
             msg.append(f"... and {len(new_items) - 12} more items.")
@@ -1652,11 +1673,6 @@ def delete_message(chat_id, message_id):
     try:
         http_session.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
     except Exception: pass
-
-
-# ==========================================
-# Telegram Bot Database & Webhook System
-# ==========================================
 
 def send_access_request_menu(chat_id, user_id):
     keyboard = [[{"text": "🔑 Request Access Permission", "callback_data": f"req_access_{user_id}"}]]
@@ -2132,16 +2148,7 @@ def handle_bot_webhook():
             username = user_info.get("username", "None")
             raw_text = msg.get("text", "").strip()
 
-            # Live link check containing Android version or fileinfo link formats
-            version = extract_version_from_input(raw_text)
-            if version and ("dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower() or "android/" in raw_text.lower() or "🟢 live link detected" in raw_text.lower()):
-                keyboard = [[{"text": f"🔍 Check Miniupdate {version}", "callback_data": f"check_ver_{version}"}]]
-                send_message_with_keyboard(chat_id, (
-                    "╭──────────────────────\n"
-                    "├ New MINIUPDATE Detected\n"
-                    f"├ Version: <b>{version}</b>\n"
-                    "╰──────────────────────"
-                ), {"inline_keyboard": keyboard}, parse_mode="HTML")
+            if not raw_text:
                 return jsonify({"status": "ok"}), 200
 
             # Access controls for private interaction commands
@@ -2149,6 +2156,70 @@ def handle_bot_webhook():
                 if not is_action_permitted(chat_id, user_id):
                     if raw_text.startswith("/start") or raw_text.startswith("/check") or raw_text.startswith("/extract"):
                         send_access_request_menu(chat_id, user_id)
+                    return jsonify({"status": "ok"}), 200
+
+            # --- MONITORING SYSTEM FOR NEW LINKS ---
+            if not raw_text.startswith("/"):
+                # Detect structured active link notification format
+                if "🟢 Link Active" in raw_text and "🔄 Next Tracked Version:" in raw_text:
+                    active_ver = None
+                    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+                    for i, line in enumerate(lines):
+                        if "Link Active" in line or "🟢 Link Active" in line:
+                            # Search the adjacent lines for a version signature
+                            for j in range(i + 1, min(i + 4, len(lines))):
+                                candidate = extract_version_from_input(lines[j])
+                                if candidate:
+                                    active_ver = candidate
+                                    break
+                            if active_ver:
+                                break
+
+                    if active_ver:
+                        try:
+                            # Immediately retrieve, send and pin the complete update summary
+                            detail_msg, file_entries, file_keyboard_mappings = run_miniupdate_extraction_details(active_ver)
+                            keyboard = []
+                            for fname, action_data in file_keyboard_mappings.items():
+                                if action_data.startswith("zip_comp_"):
+                                    comp_id = action_data.replace("zip_comp_", "")
+                                    meta = BOT_TEMP_MAPPINGS.get(comp_id)
+                                    if meta:
+                                        keyboard.append([{"text": f"📦 Combined {meta['name']} Scene ZIP", "callback_data": f"zip_comp_{comp_id}"}])
+                                        
+                            if file_entries:
+                                keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{active_ver}"}])
+                            
+                            sent_payload = {
+                                "chat_id": chat_id,
+                                "text": detail_msg,
+                                "parse_mode": "HTML"
+                            }
+                            if keyboard:
+                                sent_payload["reply_markup"] = {"inline_keyboard": keyboard}
+                                
+                            sent_msg_res = http_session.post(f"{TELEGRAM_API}/sendMessage", json=sent_payload, timeout=15).json()
+                            
+                            # Pin the sent message automatically
+                            if sent_msg_res.get("ok"):
+                                msg_id_to_pin = sent_msg_res["result"]["message_id"]
+                                http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
+                                    "chat_id": chat_id,
+                                    "message_id": msg_id_to_pin,
+                                    "disable_notification": True
+                                }, timeout=10)
+                                
+                            # Extract and send visual assets concurrently
+                            new_items = extract_new_game_items(active_ver, get_file_info_data_exact(active_ver)[0])
+                            if new_items:
+                                send_item_icons_to_chat(chat_id, new_items)
+
+                        except Exception as e:
+                            print(f"Failed handling raw active link: {e}")
+                        return jsonify({"status": "ok"}), 200
+
+                # Single, unstructured raw links sent on their own must be completely ignored
+                if "dl.tata.freefiremobile.com" in raw_text or "dl-tata.freefireind.in" in raw_text or "fileinfo" in raw_text.lower():
                     return jsonify({"status": "ok"}), 200
 
             if raw_text.startswith("/start"):
@@ -2172,7 +2243,7 @@ def handle_bot_webhook():
                     send_message(chat_id, "❌ Unable to extract a valid patch version string from the input.")
                     return jsonify({"status": "ok"}), 200
                 
-                # Send live in-progress state first to feel active and responsive
+                # Send live in-progress state first
                 sent_msg = send_message(chat_id, f"⏳ Checking miniupdate version <b>{ver}</b>...", parse_mode="HTML")
                 if not sent_msg or not sent_msg.get("ok"):
                     return jsonify({"status": "ok"}), 200
@@ -2192,7 +2263,6 @@ def handle_bot_webhook():
                                 keyboard.append([{"text": f"📦 Combined {meta['name']} Scene ZIP", "callback_data": f"zip_comp_{comp_id}"}])
                                 
                     if file_entries:
-                        # Modified version summary layout contains only the Extract All as ZIP button
                         keyboard.append([{"text": "📦 Extract All as ZIP", "callback_data": f"zip_ver_{ver}"}])
                     
                     url = f"{TELEGRAM_API}/editMessageText"
@@ -2280,145 +2350,3 @@ def handle_bot_webhook():
     except Exception as e:
         print(f"Error handling Telegram message: {e}")
     return jsonify({"status": "ok"}), 200
-
-# ==========================================
-# Telegram Bot Database helper definitions
-# ==========================================
-
-def read_db_from_chat(chat_id):
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            text = res["result"]["pinned_message"].get("text", "")
-            if "📦 DATABASE STORAGE" in text:
-                lines = text.split("\n")
-                for line in lines:
-                    line_strip = line.strip()
-                    if line_strip.startswith("{") and line_strip.endswith("}"):
-                        return json.loads(line_strip)
-    except Exception as e:
-        print(f"DB read warning for {chat_id}: {e}")
-    return None
-
-def write_db_to_chat(chat_id, db_dict):
-    db_text = f"📦 DATABASE STORAGE (DO NOT DELETE/UNPIN)\n{json.dumps(db_dict)}"
-    try:
-        res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": chat_id}, timeout=10).json()
-        if res.get("ok") and "pinned_message" in res["result"]:
-            msg = res["result"]["pinned_message"]
-            if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                http_session.post(f"{TELEGRAM_API}/editMessageText", json={
-                    "chat_id": chat_id,
-                    "message_id": msg["message_id"],
-                    "text": db_text
-                }, timeout=10)
-                return
-        new_msg = send_message(chat_id, db_text)
-        if new_msg and new_msg.get("ok"):
-            msg_id = new_msg["result"]["message_id"]
-            http_session.post(f"{TELEGRAM_API}/pinChatMessage", json={
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "disable_notification": True
-            }, timeout=10)
-    except Exception as e:
-         print(f"DB write warning: {e}")
-
-def get_db():
-    owner_db = read_db_from_chat(OWNER_ID)
-    if not owner_db:
-        owner_db = read_db_from_chat(GROUP_ID)
-        if owner_db:
-            write_db_to_chat(OWNER_ID, owner_db)
-            try:
-                res = http_session.post(f"{TELEGRAM_API}/getChat", json={"chat_id": GROUP_ID}, timeout=10).json()
-                if res.get("ok") and "pinned_message" in res["result"]:
-                    msg = res["result"]["pinned_message"]
-                    if "📦 DATABASE STORAGE" in msg.get("text", ""):
-                        http_session.post(f"{TELEGRAM_API}/unpinChatMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-                        http_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": GROUP_ID, "message_id": msg["message_id"]}, timeout=10)
-            except Exception: pass
-            
-    if not owner_db:
-        return {
-            "allowed_users": [OWNER_ID], 
-            "pending_requests": [],
-            "rejection_sticker": None,
-            "owner_state": None
-        }
-        
-    needs_write = False
-    legacy_keys = ["links", "chats", "temp_mappings", "owner_state"]
-    for k in legacy_keys:
-        if k in owner_db:
-            owner_db.pop(k, None)
-            needs_write = True
-            
-    if "allowed_users" not in owner_db: 
-        owner_db["allowed_users"] = [OWNER_ID]
-        needs_write = True
-    if "pending_requests" not in owner_db: 
-        owner_db["pending_requests"] = []
-        needs_write = True
-        
-    if needs_write:
-        save_db(owner_db)
-        
-    return owner_db
-
-def save_db(db):
-    write_db_to_chat(OWNER_ID, db)
-
-def is_user_allowed(user_id):
-    if user_id == OWNER_ID: return True
-    db = get_db()
-    for u in db.get("allowed_users", []):
-        if isinstance(u, int) and u == user_id: return True
-        elif isinstance(u, dict) and u.get("user_id") == user_id: return True
-    return False
-
-def is_action_permitted(chat_id, user_id):
-    if user_id == OWNER_ID: return True
-    if str(chat_id) == GROUP_ID: return True
-    if is_user_allowed(user_id): return True
-    return False
-
-def add_allowed_user(user_id, first_name="Unknown", username="None", chat_title="Private Chat"):
-    db = get_db()
-    allowed = db.get("allowed_users", [])
-    exists = False
-    for i, u in enumerate(allowed):
-        if isinstance(u, int) and u == user_id:
-            allowed[i] = {"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title}
-            exists = True
-            break
-        elif isinstance(u, dict) and u.get("user_id") == user_id:
-            u["first_name"] = first_name
-            u["username"] = username
-            u["chat_title"] = chat_title
-            exists = True
-            break
-    if not exists:
-        allowed.append({"user_id": user_id, "first_name": first_name, "username": username, "chat_title": chat_title})
-    db["allowed_users"] = allowed
-    save_db(db)
-
-def add_pending_request(user_id, first_name, username, chat_title):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    if not any(p["user_id"] == user_id for p in pending):
-        pending.append({
-            "user_id": user_id,
-            "first_name": first_name,
-            "username": username,
-            "chat_title": chat_title
-        })
-        db["pending_requests"] = pending
-        write_db_to_chat(OWNER_ID, db)
-
-def remove_pending_request(user_id):
-    db = get_db()
-    pending = db.get("pending_requests", [])
-    pending = [p for p in pending if p["user_id"] != user_id]
-    db["pending_requests"] = pending
-    write_db_to_chat(OWNER_ID, db)
