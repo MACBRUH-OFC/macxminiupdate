@@ -774,6 +774,9 @@ def handle_extractor_response(response, bundle_url=None):
     )
     if not isinstance(assets_list, list):
         assets_list = []
+    unresolved_textures = extractor_data.get("unresolved_textures")
+    if not isinstance(unresolved_textures, list):
+        unresolved_textures = []
     
     processed_assets = []
     for asset in assets_list:
@@ -959,6 +962,9 @@ def handle_extractor_response(response, bundle_url=None):
         "categories": categories,
         "assets": processed_assets
     }
+    if "partial" in extractor_data:
+        response_data["partial"] = bool(extractor_data.get("partial"))
+        response_data["unresolved_textures"] = unresolved_textures
     return jsonify(response_data), 200
 
 def process_file_logic():

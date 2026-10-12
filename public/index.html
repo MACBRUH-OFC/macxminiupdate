@@ -1200,6 +1200,25 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         sublistHtml += `</div>`;
 
         sublist.innerHTML = sublistHtml;
+        if (extractedData.partial) {
+            const unresolved = Array.isArray(extractedData.unresolved_textures) ? extractedData.unresolved_textures : [];
+            const recoveryPanel = document.createElement("div");
+            recoveryPanel.className = "mb-2 rounded border border-amber-500/30 bg-amber-950/20 p-2 text-[9px] font-mono text-amber-200";
+            const recoveryHeading = document.createElement("div");
+            recoveryHeading.className = "font-bold uppercase tracking-wide";
+            recoveryHeading.textContent = `Partial texture recovery · ${unresolved.length} texture record(s) still lack matching pixels`;
+            recoveryPanel.appendChild(recoveryHeading);
+            unresolved.slice(0, 20).forEach(texture => {
+                const detail = document.createElement("div");
+                detail.className = "mt-1 text-gray-300";
+                const dimensions = Number.isInteger(texture.width) && Number.isInteger(texture.height)
+                    ? ` · ${texture.width}×${texture.height}`
+                    : "";
+                detail.textContent = `${texture.name || "Unnamed Texture2D"}${dimensions}`;
+                recoveryPanel.appendChild(detail);
+            });
+            sublist.prepend(recoveryPanel);
+        }
     } catch (err) {
         loader.style.display = "none";
         sublist.innerHTML = `<div class="text-[10px] text-red-500 py-2 text-center font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40">${err.message || err}</div>`;
