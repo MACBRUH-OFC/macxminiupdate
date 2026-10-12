@@ -643,9 +643,15 @@ def analyze_update_purpose(files, new_items):
         ("Loading and visual assets", ("loading_quality", "background", "reskin", "model", "mesh"), "Visual Packages"),
         ("Text and configuration data", ("localization", "lochotfix", "quickchat", "config", "patch", "hotfix"), "Text and Config Packages"),
     ]
+    classified_package_names = set()
     for label, terms, category in named_groups:
-        matches = [f.get("fileName", "") for f in files if any(term in f.get("fileName", "").lower() for term in terms)]
+        matches = [
+            f.get("fileName", "") for f in files
+            if f.get("fileName", "") not in classified_package_names
+            and any(term in f.get("fileName", "").lower() for term in terms)
+        ]
         if matches:
+            classified_package_names.update(matches)
             categories.add(category)
             package_hints.append(label)
             sample_names = [name.rsplit("/", 1)[-1] for name in matches[:3]]
@@ -670,7 +676,8 @@ def analyze_update_purpose(files, new_items):
             "description": f"{len(files)} changed package(s) were detected. The package list below shows their names and extraction results; detailed gameplay notes are not included in the source feed."
         })
 
-    summary = "Update briefing: " + "; ".join(summary_parts[:3]) + "." if summary_parts else briefing[0]["description"]
+    summary_labels = summary_parts + package_hints
+    summary = "Changed update groups: " + ", ".join(summary_labels[:5]) + "." if summary_labels else briefing[0]["description"]
 
     return {
         "summary": summary,
