@@ -10,7 +10,7 @@ import zipfile
 import requests
 import hashlib
 import concurrent.futures
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, stream_with_context
 
 # Web configuration
 BASE_URL = 'https://dl.tata.freefiremobile.com/live/ABHotUpdates/android/'
@@ -832,6 +832,9 @@ def handle_extractor_response(response, bundle_url=None):
                     file_bytes = raw_val.encode('utf-8')
 
         remote_preview_url = asset.get("preview_url") or asset.get("url") or ""
+        if remote_preview_url.startswith("/"):
+            extractor_origin = EXTRACTOR_API_URL.split("/api/", 1)[0]
+            remote_preview_url = f"{extractor_origin}{remote_preview_url}"
         if not remote_preview_url:
             if not file_bytes:
                 file_bytes = b"{}"
@@ -844,18 +847,21 @@ def handle_extractor_response(response, bundle_url=None):
         cache_key = decoded.get("cache_key") if decoded else local_cache_token
         
         global MEMORY_ASSET_CACHE
-        MEMORY_ASSET_CACHE[cache_key] = {
-            "content": file_bytes,
-            "filename": filename_str,
-            "content_type": detected_content_type
-        }
+        if file_bytes:
+            MEMORY_ASSET_CACHE[cache_key] = {
+                "content": file_bytes,
+                "filename": filename_str,
+                "content_type": detected_content_type
+            }
         
         local_proxy_route = f"/api?action=stream&token={local_cache_token}"
         asset["preview_url"] = local_proxy_route
         asset["url"] = local_proxy_route
         asset["fileName"] = filename_str
         asset["label"] = detected_content_type
-        asset["size"] = len(file_bytes)
+        asset["size"] = len(file_bytes) or asset.get("size", 0)
+        if asset["size"] > 1_000_000:
+            asset.pop("data", None)
         processed_assets.append(asset)
 
     meshes = [a for a in processed_assets if a["fileName"].lower().endswith(".obj")]
@@ -1059,6 +1065,36 @@ def stream_cache_logic(token):
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
         except Exception: pass
+
+    remote_url = decoded.get("url")
+    extractor_origin = EXTRACTOR_API_URL.split("/api/", 1)[0]
+    if (remote_url and remote_url.startswith(extractor_origin + "/api/extract?") and
+            "download_type=single" in remote_url):
+        try:
+            upstream_headers = {}
+            if request.headers.get("Range"):
+                upstream_headers["Range"] = request.headers["Range"]
+            upstream = http_session.get(remote_url, headers=upstream_headers, timeout=(5, 120), stream=True)
+            if upstream.status_code in (200, 206):
+                def relay_chunks():
+                    try:
+                        for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                            if chunk:
+                                yield chunk
+                    finally:
+                        upstream.close()
+
+                response = Response(stream_with_context(relay_chunks()), status=upstream.status_code, mimetype=mime_type)
+                response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+                response.headers["Accept-Ranges"] = "bytes"
+                for header_name in ("Content-Length", "Content-Range"):
+                    if upstream.headers.get(header_name):
+                        response.headers[header_name] = upstream.headers[header_name]
+                response.headers["Access-Control-Allow-Origin"] = "*"
+                return response
+            upstream.close()
+        except Exception as e:
+            print(f"Direct extractor stream failed for {filename}: {e}")
         
     # Stateless extract fallback on-demand
     bundle_url = decoded.get("bundle_url")
@@ -1104,7 +1140,6 @@ def stream_cache_logic(token):
         except Exception as e:
             print(f"Stateless extraction recovery failed: {e}")
 
-    remote_url = decoded.get("url")
     if remote_url and remote_url.startswith("http"):
         try:
             res = http_session.get(remote_url, timeout=15)
