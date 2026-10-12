@@ -965,6 +965,8 @@ def handle_extractor_response(response, bundle_url=None):
     if "partial" in extractor_data:
         response_data["partial"] = bool(extractor_data.get("partial"))
         response_data["unresolved_textures"] = unresolved_textures
+        response_data["code"] = extractor_data.get("code")
+        response_data["extraction_complete"] = extractor_data.get("extraction_complete", not response_data["partial"])
     return jsonify(response_data), 200
 
 def process_file_logic():

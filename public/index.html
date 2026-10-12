@@ -1071,7 +1071,16 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
         if (!response.ok) {
             const errorMsg = extractedData.message || extractedData.error || "Extraction processing pipeline request error.";
             const errorPanel = document.createElement("div");
-            errorPanel.className = "text-[10px] text-red-400 py-2 font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40";
+            const isEncryptedBundle = extractedData.code === "unitycn_payload_unavailable";
+            errorPanel.className = isEncryptedBundle
+                ? "text-[10px] text-amber-200 py-2 font-mono select-text px-2 bg-amber-950/20 rounded border border-amber-700/40"
+                : "text-[10px] text-red-400 py-2 font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40";
+            if (isEncryptedBundle) {
+                const status = document.createElement("div");
+                status.className = "mb-1 font-bold uppercase tracking-wide";
+                status.textContent = "Protected bundle detected · extraction incomplete";
+                errorPanel.appendChild(status);
+            }
             const message = document.createElement("div");
             message.textContent = errorMsg;
             errorPanel.appendChild(message);
@@ -1206,8 +1215,16 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             recoveryPanel.className = "mb-2 rounded border border-amber-500/30 bg-amber-950/20 p-2 text-[9px] font-mono text-amber-200";
             const recoveryHeading = document.createElement("div");
             recoveryHeading.className = "font-bold uppercase tracking-wide";
-            recoveryHeading.textContent = `Partial texture recovery · ${unresolved.length} texture record(s) still lack matching pixels`;
+            recoveryHeading.textContent = extractedData.code === "unitycn_payload_partially_unavailable"
+                ? "Incomplete extraction · this UnityCN bundle has protected payload blocks"
+                : `Partial texture recovery · ${unresolved.length} texture record(s) still lack matching pixels`;
             recoveryPanel.appendChild(recoveryHeading);
+            if (extractedData.code === "unitycn_payload_partially_unavailable") {
+                const explanation = document.createElement("div");
+                explanation.className = "mt-1 text-gray-300";
+                explanation.textContent = "The bundle was not fully decoded. Assets shown here may be only a partial result; an empty list does not mean the bundle contains no assets.";
+                recoveryPanel.appendChild(explanation);
+            }
             unresolved.slice(0, 20).forEach(texture => {
                 const detail = document.createElement("div");
                 detail.className = "mt-1 text-gray-300";
