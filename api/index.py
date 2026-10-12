@@ -1103,9 +1103,14 @@ def extract_zip_logic(token):
     remote_url = decoded.get("url")
     if not remote_url: return "Target bundle address missing in decrypted token payload", 400
     encoded_url = base64.urlsafe_b64encode(remote_url.encode('utf-8')).decode('utf-8')
-    extractor_url = f"{EXTRACTOR_API_URL}&download_type=zip"
+    extractor_url = EXTRACTOR_API_URL
     try:
-        res = http_session.get(extractor_url, timeout=60, stream=True)
+        res = http_session.get(
+            extractor_url,
+            params={"bundle_url": encoded_url, "download_type": "zip"},
+            timeout=60,
+            stream=True,
+        )
         if res.status_code == 200:
             filename = decoded.get("filename", "extracted_asset") + ".zip"
             def generate():
