@@ -621,9 +621,27 @@ def analyze_update_purpose(files, new_items):
     if vehicle_names:
         categories.add("Vehicle Skins")
         summary_parts.append(f"Vehicles ({vehicle_names[0]})")
+
+    # Mini-update rows are package bundles, so their names usually have no
+    # media extension. Use recognizable package-name hints when item parsing
+    # did not identify the update's content; do not describe these as extracted.
+    package_names = [f.get("fileName", "").lower() for f in files]
+    package_hints = []
+    named_groups = [
+        ("Lobby audio", ("bgm", "audio", "sound", "voice"), "Audio Packages"),
+        ("UI effects and textures", ("uifx", "texture", "sprite"), "Texture Packages"),
+        ("Loading and visual assets", ("loading_quality", "background", "reskin", "model", "mesh"), "Visual Packages"),
+        ("Text and configuration data", ("localization", "lochotfix", "quickchat", "config", "patch", "hotfix"), "Text and Config Packages"),
+    ]
+    for label, terms, category in named_groups:
+        if any(any(term in name for term in terms) for name in package_names):
+            categories.add(category)
+            package_hints.append(label)
         
     if summary_parts:
         summary = "Integrates new visual and audio content: " + ", ".join(summary_parts[:2]) + "."
+    elif package_hints:
+        summary = "Update packages indicate " + ", ".join(package_hints[:3]) + ". Extraction status is shown on each package."
     else:
         if obj_count > 0:
             summary = f"This update deploys {obj_count} visual game models and related meshes."
@@ -635,7 +653,7 @@ def analyze_update_purpose(files, new_items):
     return {
         "summary": summary,
         "categories": list(categories) if categories else ["Maintenance Update"],
-        "severity": "Content Update" if summary_parts else "Maintenance Update"
+        "severity": "Content Update" if summary_parts or package_hints else "Maintenance Update"
     }
 
 def format_bytes_python(bytes_val):
@@ -966,6 +984,7 @@ def handle_extractor_response(response, bundle_url=None):
         response_data["partial"] = bool(extractor_data.get("partial"))
         response_data["unresolved_textures"] = unresolved_textures
         response_data["code"] = extractor_data.get("code")
+        response_data["content_hint"] = extractor_data.get("content_hint")
         response_data["extraction_complete"] = extractor_data.get("extraction_complete", not response_data["partial"])
     return jsonify(response_data), 200
 

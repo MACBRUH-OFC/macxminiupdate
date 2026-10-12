@@ -1222,7 +1222,8 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
             if (extractedData.code === "unitycn_payload_partially_unavailable") {
                 const explanation = document.createElement("div");
                 explanation.className = "mt-1 text-gray-300";
-                explanation.textContent = "The bundle was not fully decoded. Assets shown here may be only a partial result; an empty list does not mean the bundle contains no assets.";
+                const contentHint = extractedData.content_hint ? ` Package name suggests ${extractedData.content_hint}.` : "";
+                explanation.textContent = `The protected bundle was not fully decoded. Assets shown here are only the recovered portion; an empty list does not mean the bundle contains no assets.${contentHint}`;
                 recoveryPanel.appendChild(explanation);
             }
             unresolved.slice(0, 20).forEach(texture => {
