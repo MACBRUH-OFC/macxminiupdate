@@ -1347,7 +1347,7 @@ async function selectFile(item, element) {
         mediaBox.innerHTML = `
             <div class="custom-player-wrapper h-full justify-center items-center">
                 <div class="aspect-16-9-viewport bg-checkerboard flex items-center justify-center p-2 rounded-lg border border-zinc-900/60 w-full flex-1">
-                    <img src="${liveSourceData}" class="pixelated-render shadow-lg max-h-full max-w-full">
+                    <img src="${liveSourceData}" class="pixelated-render shadow-lg w-full h-full object-contain">
                 </div>
             </div>`;
     }
