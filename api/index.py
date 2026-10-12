@@ -598,6 +598,7 @@ def extract_version_from_input(input_str):
 
 def analyze_update_purpose(files, new_items):
     categories = set()
+    briefing = []
     
     obj_count = sum(1 for f in files if f["fileName"].lower().endswith(".obj"))
     png_count = sum(1 for f in files if any(f["fileName"].lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]))
@@ -608,19 +609,28 @@ def analyze_update_purpose(files, new_items):
     emote_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Emote"]
     vehicle_names = [i["name"] for i in new_items if get_item_type_label(i["id"], i["name"]) == "Vehicle"]
     
+    # Describe only what the update index and hotfix records actually prove.
+    # The feed contains asset names and IDs, not developer-authored patch notes.
+    item_groups = [
+        ("Voice Packs", "Voice Packs", voice_pack_names),
+        ("Bundles", "Costumes & Bundles", costume_names),
+        ("Emotes", "Emotes", emote_names),
+        ("Vehicle Skins", "Vehicles", vehicle_names),
+    ]
     summary_parts = []
-    if voice_pack_names:
-        categories.add("Voice Packs")
-        summary_parts.append(f"Voice Packs ({voice_pack_names[0]})")
-    if costume_names:
-        categories.add("Costumes")
-        summary_parts.append(f"Bundles ({costume_names[0]})")
-    if emote_names:
-        categories.add("Emotes")
-        summary_parts.append(f"Emotes ({emote_names[0]})")
-    if vehicle_names:
-        categories.add("Vehicle Skins")
-        summary_parts.append(f"Vehicles ({vehicle_names[0]})")
+    for category, title, names in item_groups:
+        if not names:
+            continue
+        categories.add(category)
+        samples = ", ".join(names[:3])
+        remainder = len(names) - min(len(names), 3)
+        if remainder:
+            samples += f" and {remainder} more"
+        briefing.append({
+            "title": f"New {title}",
+            "description": f"{len(names)} new item record(s) detected: {samples}."
+        })
+        summary_parts.append(f"{len(names)} {title.lower()}")
 
     # Mini-update rows are package bundles, so their names usually have no
     # media extension. Use recognizable package-name hints when item parsing
@@ -634,26 +644,39 @@ def analyze_update_purpose(files, new_items):
         ("Text and configuration data", ("localization", "lochotfix", "quickchat", "config", "patch", "hotfix"), "Text and Config Packages"),
     ]
     for label, terms, category in named_groups:
-        if any(any(term in name for term in terms) for name in package_names):
+        matches = [f.get("fileName", "") for f in files if any(term in f.get("fileName", "").lower() for term in terms)]
+        if matches:
             categories.add(category)
             package_hints.append(label)
+            sample_names = [name.rsplit("/", 1)[-1] for name in matches[:3]]
+            samples = ", ".join(sample_names)
+            remainder = len(matches) - len(sample_names)
+            if remainder:
+                samples += f" and {remainder} more"
+            briefing.append({
+                "title": label,
+                "description": f"{len(matches)} changed package(s) matched by filename: {samples}. Open each package below to inspect its extracted contents."
+            })
         
-    if summary_parts:
-        summary = "Integrates new visual and audio content: " + ", ".join(summary_parts[:2]) + "."
-    elif package_hints:
-        summary = "Update packages indicate " + ", ".join(package_hints[:3]) + ". Extraction status is shown on each package."
-    else:
-        if obj_count > 0:
-            summary = f"This update deploys {obj_count} visual game models and related meshes."
-        elif sound_count > 0:
-            summary = f"This update injects {sound_count} game sound clips and audio resources."
-        else:
-            summary = "Standard synchronization maintenance update coordinating game asset rules."
+    if not briefing and obj_count:
+        categories.add("3D Models")
+        briefing.append({"title": "3D model files", "description": f"{obj_count} changed .obj file(s) were listed in the update."})
+    if not briefing and sound_count:
+        categories.add("Audio")
+        briefing.append({"title": "Audio files", "description": f"{sound_count} changed audio file(s) were listed in the update."})
+    if not briefing:
+        briefing.append({
+            "title": "Changed update packages",
+            "description": f"{len(files)} changed package(s) were detected. The package list below shows their names and extraction results; detailed gameplay notes are not included in the source feed."
+        })
+
+    summary = "Update briefing: " + "; ".join(summary_parts[:3]) + "." if summary_parts else briefing[0]["description"]
 
     return {
         "summary": summary,
+        "briefing": briefing,
         "categories": list(categories) if categories else ["Maintenance Update"],
-        "severity": "Content Update" if summary_parts or package_hints else "Maintenance Update"
+        "severity": "Content Update" if summary_parts or package_hints or obj_count or sound_count else "Maintenance Update"
     }
 
 def format_bytes_python(bytes_val):

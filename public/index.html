@@ -193,7 +193,7 @@ body { background: #030305; color: #fff; min-height: 100vh; overflow-x: hidden; 
             <!-- Intelligence Briefing Box -->
             <div id="insightReportContainer" class="hidden bg-[#09090d] border border-zinc-900 rounded-xl p-3 mb-3 text-left">
                 <span class="block text-[8px] font-black text-yellow-500 uppercase tracking-widest leading-none mb-1.5"><i class="fa-solid fa-circle-info mr-1"></i>Update Briefing</span>
-                <p id="insightSummaryText" class="text-[10px] font-medium text-zinc-300 leading-normal mb-2"></p>
+                <ol id="insightBriefingList" class="list-decimal list-inside space-y-1.5 text-[10px] font-medium text-zinc-300 leading-relaxed mb-2"></ol>
                 <div id="insightCategories" class="flex flex-wrap gap-1"></div>
             </div>
 
@@ -506,7 +506,18 @@ extractBtn.onclick = async () => {
         }
 
         if (data.analysis) {
-            document.getElementById('insightSummaryText').innerText = data.analysis.summary || "";
+            const briefingList = document.getElementById('insightBriefingList');
+            briefingList.innerHTML = "";
+            (data.analysis.briefing || [{ title: "Update summary", description: data.analysis.summary || "Update details are shown in the package list below." }]).forEach(entry => {
+                const row = document.createElement('li');
+                const title = document.createElement('strong');
+                title.className = "text-white";
+                title.innerText = `${entry.title}: `;
+                const description = document.createElement('span');
+                description.innerText = entry.description || "";
+                row.append(title, description);
+                briefingList.appendChild(row);
+            });
             const catContainer = document.getElementById('insightCategories');
             catContainer.innerHTML = "";
             if (data.analysis.categories) {
