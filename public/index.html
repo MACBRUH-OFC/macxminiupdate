@@ -1070,7 +1070,36 @@ async function toggleAccordionTray(index, encodedUrl, encodedFileName) {
 
         if (!response.ok) {
             const errorMsg = extractedData.message || extractedData.error || "Extraction processing pipeline request error.";
-            sublist.innerHTML = `<div class="text-[10px] text-red-500 py-2 text-center font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40">${errorMsg}</div>`;
+            const errorPanel = document.createElement("div");
+            errorPanel.className = "text-[10px] text-red-400 py-2 font-mono select-text px-2 bg-red-950/20 rounded border border-red-900/40";
+            const message = document.createElement("div");
+            message.textContent = errorMsg;
+            errorPanel.appendChild(message);
+
+            const detectedTextures = Array.isArray(extractedData.detected_textures) ? extractedData.detected_textures : [];
+            if (detectedTextures.length) {
+                const heading = document.createElement("div");
+                heading.className = "mt-2 mb-1 text-[9px] font-bold uppercase tracking-wide text-amber-300";
+                heading.textContent = `Texture records found (${detectedTextures.length}); pixel data was not recovered`;
+                errorPanel.appendChild(heading);
+
+                const textureList = document.createElement("ul");
+                textureList.className = "space-y-1 text-[9px] text-gray-300";
+                detectedTextures.slice(0, 20).forEach(texture => {
+                    const item = document.createElement("li");
+                    const textureName = texture.name || "Unnamed Texture2D";
+                    const dimensions = Number.isInteger(texture.width) && Number.isInteger(texture.height)
+                        ? ` · ${texture.width}×${texture.height} ${texture.format || ""}`
+                        : "";
+                    const stream = texture.stream_path ? ` · ${texture.stream_path}` : "";
+                    const offset = Number.isSafeInteger(texture.stream_offset) ? ` · offset ${texture.stream_offset}` : "";
+                    item.textContent = `${textureName}${dimensions}${stream}${offset}`;
+                    textureList.appendChild(item);
+                });
+                errorPanel.appendChild(textureList);
+            }
+
+            sublist.replaceChildren(errorPanel);
             return;
         }
 
